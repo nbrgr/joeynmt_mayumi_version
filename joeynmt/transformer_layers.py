@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 
 import math
+from typing import Optional
+
 import torch
 from torch import nn, Tensor
 
 
-# pylint: disable=arguments-differ
 class MultiHeadedAttention(nn.Module):
     """
     Multi-Head Attention module from "Attention is All You Need"
@@ -37,7 +38,8 @@ class MultiHeadedAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, k: Tensor, v: Tensor, q: Tensor, mask: Tensor = None):
+    def forward(self, k: Tensor, v: Tensor, q: Tensor,
+                mask: Optional[Tensor] = None):
         """
         Computes multi-headed attention.
 
@@ -86,7 +88,6 @@ class MultiHeadedAttention(nn.Module):
         return output
 
 
-# pylint: disable=arguments-differ
 class PositionwiseFeedForward(nn.Module):
     """
     Position-wise Feed-forward layer
@@ -110,12 +111,11 @@ class PositionwiseFeedForward(nn.Module):
             nn.Dropout(dropout),
         )
 
-    def forward(self, x):
+    def forward(self, x: Tensor) -> Tensor:
         x_norm = self.layer_norm(x)
         return self.pwff_layer(x_norm) + x
 
 
-# pylint: disable=arguments-differ
 class PositionalEncoding(nn.Module):
     """
     Pre-compute position encodings (PE).
@@ -132,8 +132,8 @@ class PositionalEncoding(nn.Module):
         Positional Encoding with maximum length max_len
         :param size:
         :param max_len:
-        :param dropout:
         """
+        # pylint: disable=unused-argument
         if size % 2 != 0:
             raise ValueError("Cannot use sin/cos positional encoding with "
                              "odd dim (got dim={:d})".format(size))
@@ -148,7 +148,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
         self.dim = size
 
-    def forward(self, emb):
+    def forward(self, emb: Tensor) -> Tensor:
         """Embed inputs.
         Args:
             emb (FloatTensor): Sequence of word vectors
@@ -186,7 +186,6 @@ class TransformerEncoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.size = size
 
-    # pylint: disable=arguments-differ
     def forward(self, x: Tensor, mask: Tensor) -> Tensor:
         """
         Forward pass for a single transformer encoder layer.
@@ -198,11 +197,12 @@ class TransformerEncoderLayer(nn.Module):
         :param mask: input mask
         :return: output tensor
         """
+        # pylint: disable=unused-argument
         x_norm = self.layer_norm(x)
         h = self.src_src_att(x_norm, x_norm, x_norm, mask)
         h = self.dropout(h) + x
-        o = self.feed_forward(h)
-        return o
+        out = self.feed_forward(h)
+        return out
 
 
 class TransformerDecoderLayer(nn.Module):

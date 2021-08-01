@@ -3,9 +3,11 @@
 Embedding module
 """
 
-import io
-import math
 import logging
+import math
+from pathlib import Path
+from typing import Dict
+
 import torch
 from torch import nn, Tensor
 from joeynmt.helpers import freeze_params
@@ -15,11 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 class Embeddings(nn.Module):
-
     """
     Simple embeddings class
     """
-
     # pylint: disable=unused-argument
     def __init__(self,
                  embedding_dim: int = 64,
@@ -49,7 +49,6 @@ class Embeddings(nn.Module):
         if freeze:
             freeze_params(self)
 
-    # pylint: disable=arguments-differ
     def forward(self, x: Tensor) -> Tensor:
         """
         Perform lookup for input `x` in the embedding table.
@@ -61,12 +60,12 @@ class Embeddings(nn.Module):
             return self.lut(x) * math.sqrt(self.embedding_dim)
         return self.lut(x)
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return "%s(embedding_dim=%d, vocab_size=%d)" % (
             self.__class__.__name__, self.embedding_dim, self.vocab_size)
 
-    #from fairseq
-    def load_from_file(self, embed_path: str, vocab: Vocabulary):
+    # from fairseq
+    def load_from_file(self, embed_path: Path, vocab: Vocabulary) -> None:
         """Load pretrained embedding weights from text file.
 
         - First line is expected to contain vocabulary size and dimension.
@@ -89,32 +88,28 @@ class Embeddings(nn.Module):
         :param embed_path: embedding weights text file
         :param vocab: Vocabulary object
         """
-        embed_dict = {}
+        embed_dict: Dict[int, Tensor] = {}
         # parse file
-        with io.open(embed_path, 'r', encoding='utf-8',
-                     errors='ignore') as f_embed:
+        with embed_path.open('r', encoding='utf-8', errors='ignore') as f_embed:
             vocab_size, d = map(int, f_embed.readline().split())
             assert self.embedding_dim == d, \
                 "Embedding dimension doesn't match."
             for line in f_embed.readlines():
                 tokens = line.rstrip().split(' ')
-                if tokens[0] in vocab.stoi.keys():
-                    embed_dict[tokens[0]] = torch.FloatTensor(
+                if tokens[0] in vocab.specials or not vocab.is_unk(tokens[0]):
+                    embed_dict[vocab.lookup(tokens[0])] = torch.FloatTensor(
                         [float(t) for t in tokens[1:]])
 
-            logger.warning("Loaded {} of {} ({:%}) tokens "
-                           "in the pre-trained embeddings.".format(
-                           len(embed_dict), vocab_size,
-                           len(embed_dict)/vocab_size))
+            logger.warning(
+                "Loaded {} of {} ({:%}) tokens in the pre-trained WE.".format(
+                    len(embed_dict), vocab_size, len(embed_dict) / vocab_size))
 
         # assign
-        for idx in range(len(vocab)):
-            token = vocab.itos[idx]
-            if token in embed_dict:
-                assert self.embedding_dim == len(embed_dict[token])
-                self.lut.weight.data[idx] = embed_dict[token]
+        for idx, weights in embed_dict.items():
+            if idx < self.vocab_size:
+                assert self.embedding_dim == len(weights)
+                self.lut.weight.data[idx] = weights
 
-        logger.warning("Loaded {} of {} ({:%}) tokens "
-                       "of the JoeyNMT's vocabulary.".format(
-                        len(embed_dict), len(vocab),
-                        len(embed_dict)/len(vocab)))
+        logger.warning(
+            "Loaded {} of {} ({:%}) tokens of the JoeyNMT's vocabulary.".format(
+                len(embed_dict), len(vocab), len(embed_dict) / len(vocab)))
