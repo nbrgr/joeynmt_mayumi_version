@@ -2,17 +2,16 @@
 """
 Collection of helper functions
 """
+from __future__ import annotations
+
 import copy
-import glob
+import functools
 import logging
-import os
-import os.path
+import operator
+from pathlib import Path
 import random
 import shutil
-from typing import Optional, List
-from pathlib import Path
-import pkg_resources
-import yaml
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 
@@ -20,18 +19,21 @@ import torch
 from torch import nn, Tensor
 from torch.utils.tensorboard import SummaryWriter
 
-# pylint: disable=no-name-in-module
-from torchtext.legacy.data import Dataset
+import pkg_resources
+import yaml
 
-from joeynmt.vocabulary import Vocabulary
 from joeynmt.plotting import plot_heatmap
+
+if TYPE_CHECKING:
+    from joeynmt.data import TranslationDataset as Dataset
+    from joeynmt.vocabulary import Vocabulary  # to avoid circular import
 
 
 class ConfigurationError(Exception):
     """ Custom exception for misspecifications of configuration """
 
 
-def make_model_dir(model_dir: str, overwrite=False) -> str:
+def make_model_dir(model_dir: Path, overwrite: bool = False) -> Path:
     """
     Create a new directory for the model.
 
@@ -39,17 +41,18 @@ def make_model_dir(model_dir: str, overwrite=False) -> str:
     :param overwrite: whether to overwrite an existing directory
     :return: path to model directory
     """
-    if os.path.isdir(model_dir):
+    model_dir = model_dir.absolute()
+    if model_dir.is_dir():
         if not overwrite:
             raise FileExistsError(
                 "Model directory exists and overwriting is disabled.")
         # delete previous directory to start with empty dir again
         shutil.rmtree(model_dir)
-    os.makedirs(model_dir)
+    model_dir.mkdir()
     return model_dir
 
 
-def make_logger(log_dir: str = None, mode: str = "train") -> str:
+def make_logger(log_dir: Path = None, mode: str = "train") -> str:
     """
     Create a logger for logging the training/testing process.
 
@@ -67,10 +70,10 @@ def make_logger(log_dir: str = None, mode: str = "train") -> str:
             '%(asctime)s - %(levelname)s - %(name)s - %(message)s')
 
         if log_dir is not None:
-            if os.path.exists(log_dir):
-                log_file = f'{log_dir}/{mode}.log'
+            if log_dir.is_dir():
+                log_file = log_dir / f'{mode}.log'
 
-                fh = logging.FileHandler(log_file)
+                fh = logging.FileHandler(log_file.as_posix())
                 fh.setLevel(level=logging.DEBUG)
                 logger.addHandler(fh)
                 fh.setFormatter(formatter)
@@ -85,7 +88,7 @@ def make_logger(log_dir: str = None, mode: str = "train") -> str:
     return version
 
 
-def log_cfg(cfg: dict, prefix: str = "cfg") -> None:
+def log_cfg(cfg: Dict, prefix: str = "cfg") -> None:
     """
     Write configuration to log.
 
@@ -139,47 +142,56 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def log_data_info(train_data: Dataset, valid_data: Dataset, test_data: Dataset,
-                  src_vocab: Vocabulary, trg_vocab: Vocabulary) -> None:
+def log_data_info(src_vocab: Vocabulary, trg_vocab: Vocabulary,
+                  train_data: Optional[Dataset], valid_data: Optional[Dataset],
+                  test_data: Optional[Dataset]) -> None:
     """
     Log statistics of data and vocabulary.
 
+    :param src_vocab:
+    :param trg_vocab:
     :param train_data:
     :param valid_data:
     :param test_data:
-    :param src_vocab:
-    :param trg_vocab:
     """
     logger = logging.getLogger(__name__)
-    logger.info("Data set sizes: \n\ttrain %d,\n\tvalid %d,\n\ttest %d",
-                len(train_data), len(valid_data),
-                len(test_data) if test_data is not None else 0)
+    logger.info("Train dataset: %s", train_data)
+    logger.info("Valid dataset: %s", valid_data)
+    logger.info(" Test dataset: %s", test_data)
 
-    logger.info("First training example:\n\t[SRC] %s\n\t[TRG] %s",
-                " ".join(vars(train_data[0])['src']),
-                " ".join(vars(train_data[0])['trg']))
+    if train_data:
+        logger.info("First training example:\n\t[SRC] %s\n\t[TRG] %s",
+                    " ".join(train_data.src[0]), " ".join(train_data.trg[0]))
 
-    logger.info(
-        "First 10 words (src): %s",
-        " ".join('(%d) %s' % (i, t) for i, t in enumerate(src_vocab.itos[:10])))
-    logger.info(
-        "First 10 words (trg): %s",
-        " ".join('(%d) %s' % (i, t) for i, t in enumerate(trg_vocab.itos[:10])))
+    logger.info("First 10 Src tokens: %s", src_vocab.log_vocab(10))
+    logger.info("First 10 Trg tokens: %s", trg_vocab.log_vocab(10))
 
-    logger.info("Number of Src words (types): %d", len(src_vocab))
-    logger.info("Number of Trg words (types): %d", len(trg_vocab))
+    logger.info("Number of unique Src tokens (vocab_size): %d", len(src_vocab))
+    logger.info("Number of unique Trg tokens (vocab_size): %d", len(trg_vocab))
 
 
-def load_config(path="configs/default.yaml") -> dict:
+def load_config(path: Path = Path("configs/default.yaml")) -> Dict:
     """
     Loads and parses a YAML configuration file.
 
     :param path: path to YAML configuration file
     :return: configuration dictionary
     """
-    with open(path, 'r', encoding="utf-8") as ymlfile:
+    with path.open('r', encoding="utf-8") as ymlfile:
         cfg = yaml.safe_load(ymlfile)
     return cfg
+
+
+def write_list_to_file(output_path: Path, array: List[str]) -> None:
+    """
+    Write list of str to file in `output_path`.
+
+    :param output_path: output file path
+    :param array: list of strings
+    """
+    with output_path.open('w', encoding="utf-8") as opened_file:
+        for entry in array:
+            opened_file.write(f"{entry}\n")
 
 
 def bpe_postprocess(string, bpe_type="subword-nmt") -> str:
@@ -203,7 +215,7 @@ def bpe_postprocess(string, bpe_type="subword-nmt") -> str:
     return ret
 
 
-def store_attention_plots(attentions: np.array,
+def store_attention_plots(attentions: np.ndarray,
                           targets: List[List[str]],
                           sources: List[List[str]],
                           output_prefix: str,
@@ -225,7 +237,7 @@ def store_attention_plots(attentions: np.array,
     for i in indices:
         if i >= len(sources):
             continue
-        plot_file = "{}.{}.pdf".format(output_prefix, i)
+        plot_file = f"{output_prefix}.{i}.pdf"
         src = sources[i]
         trg = targets[i]
         attention_scores = attentions[i].T
@@ -245,26 +257,26 @@ def store_attention_plots(attentions: np.array,
                 tb_writer.add_figure("attention/{}.".format(i),
                                      fig,
                                      global_step=steps)
-        # pylint: disable=bare-except
-        except:
+        except Exception:   # pylint: disable=broad-except
             print("Couldn't plot example {}: src len {}, trg len {}, "
                   "attention scores shape {}".format(i, len(src), len(trg),
                                                      attention_scores.shape))
             continue
 
 
-def get_latest_checkpoint(ckpt_dir: str) -> Optional[str]:
+def get_latest_checkpoint(ckpt_dir: Path) -> Optional[Path]:
     """
-    Returns the latest checkpoint (by time) from the given directory.
+    Returns the latest checkpoint (by creation time, not the steps number!)
+    from the given directory.
     If there is no checkpoint in this directory, returns None
 
     :param ckpt_dir:
     :return: latest checkpoint file
     """
-    list_of_files = glob.glob("{}/*.ckpt".format(ckpt_dir))
+    list_of_files = ckpt_dir.glob("*.ckpt")
     latest_checkpoint = None
     if list_of_files:
-        latest_checkpoint = max(list_of_files, key=os.path.getctime)
+        latest_checkpoint = max(list_of_files, key=lambda f: f.stat().st_ctime)
 
     # check existence
     if latest_checkpoint is None:
@@ -273,17 +285,40 @@ def get_latest_checkpoint(ckpt_dir: str) -> Optional[str]:
     return latest_checkpoint
 
 
-def load_checkpoint(path: str, use_cuda: bool = True) -> dict:
+def load_checkpoint(path: Path, device: torch.device) -> Dict:
     """
     Load model from saved checkpoint.
 
     :param path: path to checkpoint
-    :param use_cuda: using cuda or not
+    :param device: cuda device name or cpu
     :return: checkpoint (dict)
     """
-    assert os.path.isfile(path), "Checkpoint %s not found" % path
-    checkpoint = torch.load(path, map_location='cuda' if use_cuda else 'cpu')
+    logger = logging.getLogger(__name__)
+    assert path.is_file(), "Checkpoint %s not found" % path
+    checkpoint = torch.load(path.as_posix(), map_location=device)
+    logger.info("Load model from %s.", path.resolve())
     return checkpoint
+
+
+def resolve_ckpt_path(ckpt: str, load_model: str, model_dir: Path) -> Path:
+    """
+    resolve checkpoint path
+    :param ckpt: str passed from stdin args (--ckpt)
+    :param load_model: config entry (cfg['training']['load_model'])
+    :param model_dir: Path(cfg['training']['model_dir'])
+    :return:
+    """
+    if ckpt is None:
+        if load_model is None:
+            if (model_dir / "best.ckpt").is_file():
+                ckpt = model_dir / "best.ckpt"
+            else:
+                ckpt = get_latest_checkpoint(model_dir)
+        else:
+            ckpt = Path(load_model)
+    else:
+        ckpt = Path(ckpt)
+    return ckpt
 
 
 # from onmt
@@ -368,6 +403,16 @@ def symlink_update(target: Path, link_name: Path) -> Optional[Path]:
         return current_last
     link_name.symlink_to(target)
     return None
+
+
+def flatten(array: List[List[Any]]) -> List[Any]:
+    """
+    flatten a nested 2D list. faster even with a very long array than
+    [item for subarray in array for item in subarray] or newarray.extend().
+    :param array: a nested list
+    :return: flattened list
+    """
+    return functools.reduce(operator.iconcat, array, [])
 
 
 def expand_reverse_index(reverse_index: List[int], n_best: int = 1) \

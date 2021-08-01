@@ -1,19 +1,23 @@
 # coding: utf-8
+"""
+Various encoders
+"""
+from typing import Tuple
 
 import torch
 from torch import nn, Tensor
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 from joeynmt.helpers import freeze_params
-from joeynmt.transformer_layers import \
-    TransformerEncoderLayer, PositionalEncoding
+from joeynmt.transformer_layers import PositionalEncoding, \
+    TransformerEncoderLayer
 
 
-#pylint: disable=abstract-method
 class Encoder(nn.Module):
     """
     Base encoder class
     """
+    # pylint: disable=abstract-method
     @property
     def output_size(self):
         """
@@ -26,7 +30,7 @@ class Encoder(nn.Module):
 
 class RecurrentEncoder(Encoder):
     """Encodes a sequence of word embeddings"""
-    #pylint: disable=unused-argument
+    # pylint: disable=unused-argument
     def __init__(self,
                  rnn_type: str = "gru",
                  hidden_size: int = 1,
@@ -84,9 +88,8 @@ class RecurrentEncoder(Encoder):
        # assert mask.shape == embed_src.shape
         assert len(src_length.shape) == 1
 
-    #pylint: disable=arguments-differ
     def forward(self, embed_src: Tensor, src_length: Tensor, mask: Tensor,
-                **kwargs) -> (Tensor, Tensor):
+                **kwargs) -> Tuple[Tensor, Tensor]:
         """
         Applies a bidirectional RNN to sequence of embeddings x.
         The input mini-batch x needs to be sorted by src length.
@@ -98,12 +101,14 @@ class RecurrentEncoder(Encoder):
             (counting tokens before padding), shape (batch_size)
         :param mask: indicates padding areas (zeros where padding), shape
             (batch_size, src_len, embed_size)
+        :param kwargs:
         :return:
             - output: hidden states with
                 shape (batch_size, max_length, directions*hidden),
             - hidden_concat: last hidden state with
                 shape (batch_size, directions*hidden)
         """
+        # pylint: disable=arguments-differ
         self._check_shapes_input_forward(embed_src=embed_src,
                                          src_length=src_length,
                                          mask=mask)
@@ -116,9 +121,8 @@ class RecurrentEncoder(Encoder):
                                       batch_first=True)
         output, hidden = self.rnn(packed)
 
-        #pylint: disable=unused-variable
         if isinstance(hidden, tuple):
-            hidden, memory_cell = hidden
+            hidden, memory_cell = hidden    # pylint: disable=unused-variable
 
         output, _ = pad_packed_sequence(output, batch_first=True,
                                         total_length=total_length)
@@ -144,7 +148,7 @@ class RecurrentEncoder(Encoder):
         return output, hidden_concat
 
     def __repr__(self):
-        return "%s(%r)" % (self.__class__.__name__, self.rnn)
+        return "%s(rnn=%r)" % (self.__class__.__name__, self.rnn)
 
 
 class TransformerEncoder(Encoder):
@@ -152,7 +156,6 @@ class TransformerEncoder(Encoder):
     Transformer Encoder
     """
 
-    #pylint: disable=unused-argument
     def __init__(self,
                  hidden_size: int = 512,
                  ff_size: int = 2048,
@@ -174,6 +177,7 @@ class TransformerEncoder(Encoder):
         :param freeze: freeze the parameters of the encoder during training
         :param kwargs:
         """
+        # pylint: disable=unused-argument
         super().__init__()
 
         # build all (num_layers) layers
@@ -191,11 +195,10 @@ class TransformerEncoder(Encoder):
         if freeze:
             freeze_params(self)
 
-    #pylint: disable=arguments-differ
     def forward(self,
                 embed_src: Tensor,
                 src_length: Tensor,
-                mask: Tensor, **kwargs) -> (Tensor, Tensor):
+                mask: Tensor, **kwargs) -> Tuple[Tensor, Tensor]:
         """
         Pass the input (and mask) through each layer in turn.
         Applies a Transformer encoder to sequence of embeddings x.
@@ -208,12 +211,14 @@ class TransformerEncoder(Encoder):
             (counting tokens before padding), shape (batch_size)
         :param mask: indicates padding areas (zeros where padding), shape
             (batch_size, 1, src_len)
+        :param kwargs:
         :return:
             - output: hidden states with
                 shape (batch_size, max_length, directions*hidden),
             - hidden_concat: last hidden state with
                 shape (batch_size, directions*hidden)
         """
+        # pylint: disable=arguments-differ,unused-argument
         x = self.pe(embed_src)  # add position encoding to word embeddings
         x = self.emb_dropout(x)
 

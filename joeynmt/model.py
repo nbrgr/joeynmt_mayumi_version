@@ -2,19 +2,22 @@
 """
 Module to represents whole models
 """
-from typing import Callable
 import logging
+from pathlib import Path
+from typing import Callable, Tuple
+
+import numpy as np
 
 from torch import nn, Tensor
 import torch.nn.functional as F
 
-from joeynmt.initialization import initialize_model
+
+from joeynmt.decoders import Decoder, RecurrentDecoder, TransformerDecoder
 from joeynmt.embeddings import Embeddings
 from joeynmt.encoders import Encoder, RecurrentEncoder, TransformerEncoder
-from joeynmt.decoders import Decoder, RecurrentDecoder, TransformerDecoder
-from joeynmt.constants import PAD_TOKEN, EOS_TOKEN, BOS_TOKEN
-from joeynmt.vocabulary import Vocabulary
 from joeynmt.helpers import ConfigurationError
+from joeynmt.initialization import initialize_model
+from joeynmt.vocabulary import Vocabulary
 
 logger = logging.getLogger(__name__)
 
@@ -49,21 +52,21 @@ class Model(nn.Module):
         self.decoder = decoder
         self.src_vocab = src_vocab
         self.trg_vocab = trg_vocab
-        self.bos_index = self.trg_vocab.stoi[BOS_TOKEN]
-        self.pad_index = self.trg_vocab.stoi[PAD_TOKEN]
-        self.eos_index = self.trg_vocab.stoi[EOS_TOKEN]
-        self._loss_function = None # set by the TrainManager
+        self.pad_index = self.trg_vocab.pad_index
+        self.bos_index = self.trg_vocab.bos_index
+        self.eos_index = self.trg_vocab.eos_index
+        # self.loss_function = None # set by the TrainManager
 
     @property
     def loss_function(self):
-        return self._x
+        return self._loss_function
 
     @loss_function.setter
     def loss_function(self, loss_function: Callable):
         self._loss_function = loss_function
 
     def forward(self, return_type: str = None, **kwargs) \
-            -> (Tensor, Tensor, Tensor, Tensor):
+            -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """ Interface for multi-gpu
 
         For DataParallel, We need to encapsulate all model call: model.encode(),
@@ -110,7 +113,7 @@ class Model(nn.Module):
     # pylint: disable=arguments-differ
     def _encode_decode(self, src: Tensor, trg_input: Tensor, src_mask: Tensor,
                        src_length: Tensor, trg_mask: Tensor = None, **kwargs) \
-            -> (Tensor, Tensor, Tensor, Tensor):
+            -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """
         First encodes the source sentence.
         Then produces the target one word at a time.
@@ -136,7 +139,7 @@ class Model(nn.Module):
                             trg_mask=trg_mask, **kwargs)
 
     def _encode(self, src: Tensor, src_length: Tensor, src_mask: Tensor,
-                **_kwargs) -> (Tensor, Tensor):
+                **_kwargs) -> Tuple[Tensor, Tensor]:
         """
         Encodes the source sentence.
 
@@ -152,7 +155,7 @@ class Model(nn.Module):
                 src_mask: Tensor, trg_input: Tensor,
                 unroll_steps: int, decoder_hidden: Tensor = None,
                 att_vector: Tensor = None, trg_mask: Tensor = None, **_kwargs) \
-            -> (Tensor, Tensor, Tensor, Tensor):
+            -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         """
         Decode, given an encoded source sentence.
 
@@ -186,9 +189,24 @@ class Model(nn.Module):
                "\tencoder=%s,\n" \
                "\tdecoder=%s,\n" \
                "\tsrc_embed=%s,\n" \
-               "\ttrg_embed=%s)" % (self.__class__.__name__, self.encoder,
-                                    self.decoder, self.src_embed,
-                                    self.trg_embed)
+               "\ttrg_embed=%s,\n" \
+               "\tloss_function=%s)" % (self.__class__.__name__,
+                                        self.encoder, self.decoder,
+                                        self.src_embed, self.trg_embed,
+                                        self.loss_function)
+
+    def log_parameters_list(self) -> None:
+        """
+        Write all model parameters (name, shape) to the log.
+        """
+        model_parameters = filter(lambda p: p.requires_grad, self.parameters())
+        n_params = sum([np.prod(p.size()) for p in model_parameters])
+        logger.info("Total params: %d", n_params)
+        trainable_params = [
+            n for (n, p) in self.named_parameters() if p.requires_grad
+        ]
+        logger.debug("Trainable parameters: %s", sorted(trainable_params))
+        assert trainable_params
 
 
 class _DataParallel(nn.DataParallel):
@@ -212,17 +230,15 @@ def build_model(cfg: dict = None,
     :return: built and initialized model
     """
     logger.info("Building an encoder-decoder model...")
-    src_padding_idx = src_vocab.stoi[PAD_TOKEN]
-    trg_padding_idx = trg_vocab.stoi[PAD_TOKEN]
 
     src_embed = Embeddings(
         **cfg["encoder"]["embeddings"], vocab_size=len(src_vocab),
-        padding_idx=src_padding_idx)
+        padding_idx=src_vocab.pad_index)
 
     # this ties source and target embeddings
     # for softmax layer tying, see further below
     if cfg.get("tied_embeddings", False):
-        if src_vocab.itos == trg_vocab.itos:
+        if src_vocab == trg_vocab:
             # share embeddings for src and trg
             trg_embed = src_embed
         else:
@@ -231,7 +247,7 @@ def build_model(cfg: dict = None,
     else:
         trg_embed = Embeddings(
             **cfg["decoder"]["embeddings"], vocab_size=len(trg_vocab),
-            padding_idx=trg_padding_idx)
+            padding_idx=trg_vocab.pad_index)
 
     # build encoder
     enc_dropout = cfg["encoder"].get("dropout", 0.)
@@ -278,19 +294,18 @@ def build_model(cfg: dict = None,
                 "The decoder must be a Transformer.")
 
     # custom initialization of model parameters
-    initialize_model(model, cfg, src_padding_idx, trg_padding_idx)
+    initialize_model(model, cfg, src_vocab.pad_index, trg_vocab.pad_index)
 
     # initialize embeddings from file
-    pretrained_enc_embed_path = cfg["encoder"]["embeddings"].get(
-        "load_pretrained", None)
-    pretrained_dec_embed_path = cfg["decoder"]["embeddings"].get(
-        "load_pretrained", None)
-    if pretrained_enc_embed_path:
+    enc_embed_path = cfg["encoder"]["embeddings"].get("load_pretrained", None)
+    dec_embed_path = cfg["decoder"]["embeddings"].get("load_pretrained", None)
+    if enc_embed_path and src_vocab is not None:
         logger.info("Loading pretraind src embeddings...")
-        model.src_embed.load_from_file(pretrained_enc_embed_path, src_vocab)
-    if pretrained_dec_embed_path and not cfg.get("tied_embeddings", False):
+        model.src_embed.load_from_file(Path(enc_embed_path), src_vocab)
+    if dec_embed_path and src_vocab is not None \
+            and not cfg.get("tied_embeddings", False):
         logger.info("Loading pretraind trg embeddings...")
-        model.trg_embed.load_from_file(pretrained_dec_embed_path, trg_vocab)
+        model.trg_embed.load_from_file(Path(dec_embed_path), trg_vocab)
 
     logger.info("Enc-dec model built.")
     return model

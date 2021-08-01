@@ -11,7 +11,7 @@ from torch import nn, Tensor
 from torch.nn.init import _calculate_fan_in_and_fan_out
 
 
-def orthogonal_rnn_init_(cell: nn.RNNBase, gain: float = 1.):
+def orthogonal_rnn_init_(cell: nn.RNNBase, gain: float = 1.) -> None:
     """
     Orthogonal initialization of recurrent weights
     RNN parameters contain 3 or 4 matrices in one parameter, so we slice it.
@@ -31,9 +31,10 @@ def lstm_forget_gate_init_(cell: nn.RNNBase, value: float = 1.) -> None:
     """
     with torch.no_grad():
         for _, _, ih_b, hh_b in cell.all_weights:
-            l = len(ih_b)
-            ih_b.data[l // 4:l // 2].fill_(value)
-            hh_b.data[l // 4:l // 2].fill_(value)
+            length = len(ih_b)
+            ih_b.data[length // 4:length // 2].fill_(value)
+            hh_b.data[length // 4:length // 2].fill_(value)
+
 
 
 def xavier_uniform_n_(w: Tensor, gain: float = 1., n: int = 4) -> None:
@@ -55,7 +56,6 @@ def xavier_uniform_n_(w: Tensor, gain: float = 1., n: int = 4) -> None:
         nn.init.uniform_(w, -a, a)
 
 
-# pylint: disable=too-many-branches
 def initialize_model(model: nn.Module, cfg: dict, src_padding_idx: int,
                      trg_padding_idx: int) -> None:
     """
@@ -94,7 +94,7 @@ def initialize_model(model: nn.Module, cfg: dict, src_padding_idx: int,
     :param src_padding_idx: index of source padding token
     :param trg_padding_idx: index of target padding token
     """
-
+    # pylint: disable=too-many-branches
     # defaults: xavier, embeddings: normal 0.01, biases: zeros, no orthogonal
     gain = float(cfg.get("init_gain", 1.0))  # for xavier
     init = cfg.get("initializer", "xavier")
@@ -107,8 +107,8 @@ def initialize_model(model: nn.Module, cfg: dict, src_padding_idx: int,
     bias_init = cfg.get("bias_initializer", "zeros")
     bias_init_weight = float(cfg.get("bias_init_weight", 0.01))
 
-    # pylint: disable=unnecessary-lambda, no-else-return
-    def _parse_init(s, scale, _gain):
+    def _parse_init(s: str, scale: float, _gain: float):
+        # pylint: disable=unnecessary-lambda, no-else-return
         scale = float(scale)
         assert scale > 0., "incorrect init_weight"
         if s.lower() == "xavier":
