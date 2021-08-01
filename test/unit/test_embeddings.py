@@ -1,7 +1,8 @@
+from test.unit.test_helpers import TensorTestCase
+
 import torch
 
 from joeynmt.embeddings import Embeddings
-from .test_helpers import TensorTestCase
 
 
 class TestEmbeddings(TensorTestCase):
@@ -33,7 +34,7 @@ class TestEmbeddings(TensorTestCase):
                              vocab_size=self.vocab_size,
                              padding_idx=self.pad_idx,
                              freeze=True)
-        for n, p in encoder.named_parameters():
+        for _, p in encoder.named_parameters():
             self.assertFalse(p.requires_grad)
 
     def test_forward(self):
@@ -42,12 +43,12 @@ class TestEmbeddings(TensorTestCase):
         emb = Embeddings(embedding_dim=self.emb_size,
                          vocab_size=self.vocab_size,
                          padding_idx=self.pad_idx)
-        self._fill_embeddings(emb, weights)
+        emb.lut.weight.data = weights # fill embeddings
         indices = torch.Tensor([0, 1, self.pad_idx, 9]).long()
         embedded = emb.forward(x=indices)
         # embedding operation is just slicing from weights matrix
-        self.assertTensorEqual(embedded, torch.index_select(input=weights,
-                                                      index=indices, dim=0))
+        self.assertTensorEqual(
+            embedded, torch.index_select(input=weights, index=indices, dim=0))
         # after embedding, representations for PAD should still be zero
         self.assertTensorEqual(embedded[2], torch.zeros([self.emb_size]))
 
@@ -65,14 +66,10 @@ class TestEmbeddings(TensorTestCase):
         self.assertTensorNotEqual(
             torch.index_select(input=weights, index=indices, dim=0), embedded)
         self.assertTensorEqual(
-            torch.index_select(input=weights, index=indices, dim=0)*
-            (self.emb_size**0.5), embedded)
-
-    def _fill_embeddings(self, embeddings, weights):
-        embeddings.lut.weight.data = weights
+            torch.index_select(input=weights, index=indices, dim=0)
+            * (self.emb_size ** 0.5), embedded)
 
     def _get_random_embedding_weights(self):
         weights = torch.rand([self.vocab_size, self.emb_size])
         weights[self.pad_idx] = torch.zeros([self.emb_size])
         return weights
-
