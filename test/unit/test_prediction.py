@@ -74,7 +74,7 @@ class TestPrediction(unittest.TestCase):
         }
 
         # load data
-        _, _, test_data, src_vocab, trg_vocab = load_data(
+        src_vocab, trg_vocab, _, _, test_data = load_data(
             self.cfg["data"], datasets=["train", "test"])
         self.test_data = test_data
         self.parsed_cfg = parse_test_args(self.cfg, mode="translate")
@@ -84,14 +84,15 @@ class TestPrediction(unittest.TestCase):
                                  src_vocab=src_vocab, trg_vocab=trg_vocab)
 
     def _translate(self, n_best):
-        (batch_size, batch_type, use_cuda, device, n_gpu, level, eval_metric,
+        # pylint: disable=unused-variable
+        (batch_size, batch_type, device, n_gpu, level, eval_metric,
          max_output_length, beam_size, beam_alpha, postprocess, bpe_type,
          sacrebleu, _, _) = self.parsed_cfg
 
-        (score, loss, ppl, sources, sources_raw, references, hypotheses,
-         hypotheses_raw, attention_scores) = validate_on_data(
+        (score, loss, ppl, sources, references, hypotheses, hypotheses_raw,
+         attention_scores) = validate_on_data(
             self.model, data=self.test_data, batch_size=batch_size,
-            batch_type=batch_type, level=level, use_cuda=use_cuda,
+            batch_type=batch_type, level=level, device=device,
             max_output_length=max_output_length, eval_metric=None,
             compute_loss=False, beam_size=beam_size, beam_alpha=beam_alpha,
             postprocess=postprocess, bpe_type=bpe_type, sacrebleu=sacrebleu,
@@ -99,6 +100,7 @@ class TestPrediction(unittest.TestCase):
         return sources, hypotheses
 
     def test_transformer_nbest(self):
+        # pylint: disable=unused-variable
         n_best = 1
         sources_1best, hypotheses_1best = self._translate(n_best)
         self.assertEqual(len(self.test_data), len(hypotheses_1best))
@@ -106,6 +108,7 @@ class TestPrediction(unittest.TestCase):
         n_best = 5
         sources_5best, hypotheses_5best = self._translate(n_best)
         self.assertEqual(len(self.test_data) * n_best, len(hypotheses_5best))
+        # pylint: enable=unused-variable
 
         for n in range(n_best):
             hyp = [hypotheses_5best[i]

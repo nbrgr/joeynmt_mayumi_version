@@ -1,12 +1,11 @@
-from torch.nn import GRU, LSTM
-import torch
-import numpy as np
+import copy
+from test.unit.test_helpers import TensorTestCase
 
-from joeynmt.encoders import RecurrentEncoder
-from .test_helpers import TensorTestCase
+import torch
+
 from joeynmt.model import build_model
 from joeynmt.vocabulary import Vocabulary
-import copy
+
 
 
 class TestWeightTying(TensorTestCase):
@@ -48,7 +47,7 @@ class TestWeightTying(TensorTestCase):
         model = build_model(cfg["model"],
                             src_vocab=src_vocab, trg_vocab=trg_vocab)
 
-        self.assertEqual(src_vocab.itos, trg_vocab.itos)
+        self.assertEqual(src_vocab, trg_vocab)
         self.assertEqual(model.src_embed, model.trg_embed)
         self.assertTensorEqual(model.src_embed.lut.weight,
                                model.trg_embed.lut.weight)
