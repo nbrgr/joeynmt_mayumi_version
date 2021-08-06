@@ -12,8 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from joeynmt.data import TranslationDataset, _tokenize, load_data, \
-    make_data_iter
+from joeynmt.data import TranslationDataset, load_data, make_data_iter
 from joeynmt.helpers import bpe_postprocess, expand_reverse_index, \
     load_checkpoint, load_config, make_logger, resolve_ckpt_path, \
     store_attention_plots, write_list_to_file
@@ -31,7 +30,6 @@ def validate_on_data(model: Model,
                      device: torch.device,
                      n_gpu: int,
                      max_output_length: int,
-                     level: str,
                      eval_metric: Optional[str],
                      compute_loss: bool = False,
                      beam_size: int = 1,
@@ -54,7 +52,6 @@ def validate_on_data(model: Model,
     :param device: cpu or gpu
     :param n_gpu: number of GPUs
     :param max_output_length: maximum length for generated hypotheses
-    :param level: segmentation level, one of "char", "bpe", "word"
     :param eval_metric: evaluation metric, e.g. "bleu"
     :param compute_loss: whether to computes a scalar loss
         for given inputs and targets
@@ -93,7 +90,6 @@ def validate_on_data(model: Model,
     valid_iter = make_data_iter(
         dataset=data, batch_size=batch_size, batch_type=batch_type,
         shuffle=False, pad_index=model.pad_index, device=device)
-    # valid_sources_raw = data.src
 
     # disable dropout
     model.eval()
@@ -112,7 +108,7 @@ def validate_on_data(model: Model,
         sort_reverse_index = expand_reverse_index(reverse_index, n_best)
 
         # run as during training to get validation loss (e.g. xent)
-        if compute_loss and batch.trg is not None:
+        if compute_loss and batch.has_trg:
             # don't track gradients during validation
             with torch.no_grad():
                 batch_loss, _, _, _ = model(return_type="loss", **vars(batch))
@@ -132,7 +128,6 @@ def validate_on_data(model: Model,
         all_outputs.extend(output[sort_reverse_index])
         valid_attention_scores.extend(attention_scores[sort_reverse_index]
                                       if attention_scores is not None else [])
-
     assert len(all_outputs) == len(data) * n_best
 
     if compute_loss and total_ntokens > 0:
@@ -149,22 +144,12 @@ def validate_on_data(model: Model,
                                                         cut_at_eos=True)
 
     # evaluate with metric on full dataset
-    join_char = " " if level in ["word", "bpe"] else ""
-    valid_sources = [join_char.join(s) for s in data.src]
-    valid_references = [join_char.join(t) for t in data.trg] \
-        if data.trg is not None else []
-    valid_hypotheses = [join_char.join(t) for t in decoded_valid]
-
-    # post-process
-    if level == "bpe" and postprocess:
-        valid_sources = [bpe_postprocess(s, bpe_type=bpe_type)
-                         for s in valid_sources]
-        valid_references = [bpe_postprocess(v, bpe_type=bpe_type)
-                            for v in valid_references]
-        valid_hypotheses = [bpe_postprocess(v, bpe_type=bpe_type)
-                            for v in valid_hypotheses]
+    valid_sources, valid_references = data.get_raw_texts()
+    valid_hypotheses = [data.tokenizer['trg'].post_process(t)
+                        for t in decoded_valid]
 
     # if references are given, evaluate against them
+    current_valid_score = -1
     if valid_references:
         assert len(valid_hypotheses) == len(valid_references)
 
@@ -179,12 +164,11 @@ def validate_on_data(model: Model,
                 remove_whitespace=sacrebleu["remove_whitespace"])
         elif eval_metric.lower() == 'token_accuracy':
             current_valid_score = token_accuracy(   # supply List[List[str]]
-                list(decoded_valid), list(data.trg))
+                list(decoded_valid), data.tokenizer['trg'](
+                    valid_references, sample=False, filter_by_length=False))
         elif eval_metric.lower() == 'sequence_accuracy':
             current_valid_score = sequence_accuracy(
                 valid_hypotheses, valid_references)
-    else:
-        current_valid_score = -1
 
     return current_valid_score, valid_loss, valid_ppl, valid_sources, \
         valid_references, valid_hypotheses, decoded_valid, \
@@ -223,7 +207,6 @@ def parse_test_args(cfg, mode="test"):
         logger.debug("Process device: %s, n_gpu: %d", device, n_gpu)
         eval_metric = ""
 
-    level = cfg["data"]["level"]
     max_output_length = cfg["training"].get("max_output_length", None)
 
     # whether to use beam search for decoding, 0: greedy decoding
@@ -249,16 +232,16 @@ def parse_test_args(cfg, mode="test"):
     decoding_description = "Greedy decoding" if beam_size < 2 else \
         f"Beam search decoding with beam size = {beam_size} " \
         f"and alpha = {beam_alpha}"
-    tokenizer_info = sacrebleu['tokenize'] if eval_metric == "bleu" else ""
+    tokenizer_info = f" [{sacrebleu['tokenize']}]" if eval_metric == "bleu" else ""
 
     # caution: batch_size divided by beam_size, because a batch will be expanded
     # to batch.nseqs * beam_size, and it could cause an out-of-memory error.
     if batch_size > beam_size:
         batch_size //= beam_size
 
-    return batch_size, batch_type, device, n_gpu, level, \
-        eval_metric, max_output_length, beam_size, beam_alpha, \
-        postprocess, bpe_type, sacrebleu, decoding_description, tokenizer_info
+    return batch_size, batch_type, device, n_gpu, eval_metric, \
+           max_output_length, beam_size, beam_alpha, sacrebleu, \
+           decoding_description, tokenizer_info
 
 
 def test(cfg_file,
@@ -304,9 +287,8 @@ def test(cfg_file,
         trg_vocab = datasets["trg_vocab"]
 
     # parse test args
-    batch_size, batch_type, device, n_gpu, level, eval_metric, \
-        max_output_length, beam_size, beam_alpha, postprocess, \
-        bpe_type, sacrebleu, decoding_description, tokenizer_info \
+    batch_size, batch_type, device, n_gpu, eval_metric, max_output_length, \
+        beam_size, beam_alpha, sacrebleu, decoding_description, tokenizer_info \
         = parse_test_args(cfg, mode="test")
 
     # build model and load parameters into it
@@ -334,21 +316,22 @@ def test(cfg_file,
 
         dataset_file = f'{cfg["data"][data_set_name]}.{cfg["data"]["src"]}'
         logger.info("Decoding on %s set (%s)...", data_set_name, dataset_file)
+        data_set.open_file()
 
         # pylint: disable=unused-variable
         (score, loss, ppl, sources, references, hypotheses, hypotheses_raw,
          attention_scores) = validate_on_data(
             model, data=data_set, batch_size=batch_size, batch_type=batch_type,
-            level=level, max_output_length=max_output_length,
-            eval_metric=eval_metric, device=device, compute_loss=False,
-            beam_size=beam_size, beam_alpha=beam_alpha, postprocess=postprocess,
-            bpe_type=bpe_type, sacrebleu=sacrebleu, n_gpu=n_gpu)
+            max_output_length=max_output_length, eval_metric=eval_metric,
+            device=device, compute_loss=False, beam_size=beam_size,
+            beam_alpha=beam_alpha, sacrebleu=sacrebleu, n_gpu=n_gpu, n_best=1)
         # pylint: enable=unused-variable
 
-        if data_set.trg is not None:
-            logger.info("%4s %s%s: %6.2f [%s]",
-                        data_set_name, eval_metric, tokenizer_info,
-                        score, decoding_description)
+        data_set.close_file()
+
+        if data_set.has_trg:
+            logger.info("%4s %s%s: %6.2f (%s)", data_set_name, eval_metric,
+                        tokenizer_info, score, decoding_description)
         else:
             logger.info("No references given for %s -> no evaluation.",
                         data_set_name)
@@ -396,15 +379,11 @@ def translate(cfg_file: str,
 
     def _translate_data(test_data):
         """ Translates given dataset, using parameters from outer scope. """
-        # pylint: disable=unused-variable
-        (score, loss, ppl, sources, references, hypotheses, hypotheses_raw,
-         attention_scores) = validate_on_data(
+        _, _, _, _, _, hypotheses, _, _ = validate_on_data(
             model, data=test_data, batch_size=batch_size, batch_type=batch_type,
-            level=level, max_output_length=max_output_length, eval_metric="",
-            device=device, compute_loss=False, beam_size=beam_size,
-            beam_alpha=beam_alpha, postprocess=postprocess, bpe_type=bpe_type,
+            max_output_length=max_output_length, eval_metric="", device=device,
+            compute_loss=False, beam_size=beam_size, beam_alpha=beam_alpha,
             sacrebleu=sacrebleu, n_gpu=n_gpu, n_best=n_best)
-        # pylint: enable=unused-variable
         return hypotheses
 
     cfg = load_config(Path(cfg_file))
@@ -423,13 +402,10 @@ def translate(cfg_file: str,
     src_vocab = Vocabulary(file=Path(src_vocab_file))
     trg_vocab = Vocabulary(file=Path(trg_vocab_file))
 
-    data_cfg = cfg["data"]
-    lowercase = data_cfg["lowercase"]
-
     # parse test args
-    batch_size, batch_type, device, n_gpu, level, _, \
-        max_output_length, beam_size, beam_alpha, postprocess, \
-        bpe_type, sacrebleu, _, _ = parse_test_args(cfg, mode="translate")
+    batch_size, batch_type, device, n_gpu, eval_metric, max_output_length, \
+    beam_size, beam_alpha, sacrebleu, decoding_description, tokenizer_info \
+        = parse_test_args(cfg, mode="translate")
 
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
@@ -441,13 +417,15 @@ def translate(cfg_file: str,
     if device.type == "cuda":
         model.to(device)
 
+    src_tokenizer = Tokenizer(src_vocab, **cfg["data"]["spm_src"])
+    test_data = MonoDataset(lowercase=cfg["data"]["lowercase"],
+                            src_tokenizer=src_tokenizer,
+                            src_padding=src_vocab.sentences_to_ids)
+
     if not sys.stdin.isatty():
         # input stream given
-        test_src = [_tokenize(line.rstrip(), level, lowercase)
-                    for line in sys.stdin.readlines()]
-        test_data = TranslationDataset(test_src, None,
-                                       src_padding=src_vocab.sentences_to_ids,
-                                       trg_padding=trg_vocab.sentences_to_ids)
+        for line in sys.stdin.readlines():
+            test_data.set_item(line.rstrip())
         all_hypotheses = _translate_data(test_data)
         assert len(all_hypotheses) == len(test_data) * n_best
 
@@ -488,11 +466,7 @@ def translate(cfg_file: str,
                     break
 
                 # every line has to be made into dataset
-                test_src = [_tokenize(src_input, level, lowercase)]
-                test_data = TranslationDataset(
-                    test_src, None,
-                    src_padding=src_vocab.sentences_to_ids,
-                    trg_padding=trg_vocab.sentences_to_ids)
+                test_data.set_item(src_input)
                 hypotheses = _translate_data(test_data)
 
                 print("JoeyNMT: Hypotheses ranked by score")

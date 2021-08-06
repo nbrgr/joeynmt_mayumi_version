@@ -38,9 +38,9 @@ class Batch:
         self.trg_mask: Optional[Tensor] = None
         self.trg_length: Optional[Tensor] = None
         self.ntokens: Optional[Tensor] = None
-        self._has_trg = trg is not None and trg_length is not None
+        self.has_trg = trg is not None and trg_length is not None
 
-        if self._has_trg:
+        if self.has_trg:
             # trg_input is used for teacher forcing, last one is cut off
             self.trg_input = trg[:, :-1]
             self.trg_length = trg_length
@@ -61,7 +61,7 @@ class Batch:
         self.src_mask = self.src_mask.to(device)
         self.src_length = self.src_length.to(device)
 
-        if self._has_trg:
+        if self.has_trg:
             self.trg_input = self.trg_input.to(device)
             self.trg = self.trg.to(device)
             self.trg_mask = self.trg_mask.to(device)
@@ -80,7 +80,7 @@ class Batch:
         sorted_src_length = self.src_length[perm_index]
         sorted_src = self.src[perm_index]
         sorted_src_mask = self.src_mask[perm_index]
-        if self._has_trg:
+        if self.has_trg:
             sorted_trg_input = self.trg_input[perm_index]
             sorted_trg_length = self.trg_length[perm_index]
             sorted_trg_mask = self.trg_mask[perm_index]
@@ -90,7 +90,7 @@ class Batch:
         self.src_length = sorted_src_length
         self.src_mask = sorted_src_mask
 
-        if self._has_trg:
+        if self.has_trg:
             self.trg_input = sorted_trg_input
             self.trg_mask = sorted_trg_mask
             self.trg_length = sorted_trg_length

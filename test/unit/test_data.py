@@ -50,7 +50,7 @@ class TestData(unittest.TestCase):
         _ = next(train_iter)  # skip another batch
         batch = next(train_iter)
 
-        self.assertEqual(batch.src.shape, (9, 12))
+        self.assertEqual(batch.src.shape, (9, 11))
         self.assertLessEqual(batch.ntokens, 64)
 
     def testDataLoading(self):

@@ -161,7 +161,10 @@ def log_data_info(src_vocab: Vocabulary, trg_vocab: Vocabulary,
 
     if train_data:
         logger.info("First training example:\n\t[SRC] %s\n\t[TRG] %s",
-                    " ".join(train_data.src[0]), " ".join(train_data.trg[0]))
+        " ".join(train_data.get_item(
+            idx=0, side="src", sample=False, filter_by_length=False)),
+        " ".join(train_data.get_item(
+            idx=0, side="trg", sample=False, filter_by_length=False)))
 
     logger.info("First 10 Src tokens: %s", src_vocab.log_vocab(10))
     logger.info("First 10 Trg tokens: %s", trg_vocab.log_vocab(10))

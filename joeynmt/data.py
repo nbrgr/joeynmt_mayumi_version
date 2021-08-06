@@ -11,6 +11,7 @@ import sys
 from typing import Callable, List, Optional, Tuple, Union
 
 import numpy as np
+import sentencepiece as spm
 
 import torch
 from torch.utils.data import BatchSampler, DataLoader, Dataset, \
@@ -18,7 +19,7 @@ from torch.utils.data import BatchSampler, DataLoader, Dataset, \
 
 from joeynmt.batch import Batch
 from joeynmt.constants import PAD_ID
-from joeynmt.helpers import log_data_info
+from joeynmt.helpers import log_data_info, write_list_to_file
 from joeynmt.vocabulary import Vocabulary, build_vocab
 
 logger = logging.getLogger(__name__)
@@ -28,13 +29,8 @@ logger = logging.getLogger(__name__)
 try:
     torch.multiprocessing.set_start_method('spawn')
 except RuntimeError as e:
-    logger.debug("torch.multiprocessing.set_start_method('spawn') faild. %s", e)
-
-# pandas (for multiprocessing)
-try:
-    import pandas as pd
-except ImportError as no_pd:
-    logger.debug('pandas package not found. %s', no_pd)
+    logger.debug("torch.multiprocessing.set_start_method('spawn') failed. %s",
+                 e)
 
 
 def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
@@ -76,30 +72,16 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     if train_path is None and dev_path is None and test_path is None:
         raise ValueError('Please specify at least one data source path.')
 
-    level = data_cfg["level"]
     lowercase = data_cfg["lowercase"]
     max_len = data_cfg["max_sent_length"]
 
-    train_data, train_src, train_trg = None, None, None
+    train_data = None
     if "train" in datasets and train_path is not None:
         logger.info("Loading training data...")
-        train_src, train_trg = read_data_file(path=Path(train_path),
-                                                      exts=(src_lang, trg_lang),
-                                                      level=level,
-                                                      lowercase=lowercase,
-                                                      max_len=max_len,
-                                                      num_workers=num_workers)
-
-        random_train_subset = data_cfg.get("random_train_subset", -1)
-        if random_train_subset > -1:
-            # select this many training examples randomly and discard the rest
-            keep_index = np.random.permutation(np.arange(len(train_src)))
-            keep_index = keep_index[:random_train_subset]
-            keep_index.sort()
-            train_src = [train_src[i] for i in keep_index]
-            train_trg = [train_trg[i] for i in keep_index]
-
-        train_data = TranslationDataset(train_src, train_trg)
+        train_data = TranslationDataset(path=Path(train_path),
+                                        exts=(src_lang, trg_lang),
+                                        lowercase=lowercase,
+                                        max_len=max_len, is_train=True)
 
     src_max_size = data_cfg.get("src_voc_limit", sys.maxsize)
     src_min_freq = data_cfg.get("src_voc_min_freq", 1)
@@ -111,31 +93,37 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     src_vocab_file = None if src_vocab_file is None else Path(src_vocab_file)
     trg_vocab_file = None if trg_vocab_file is None else Path(trg_vocab_file)
 
-    assert (train_src is not None) or (src_vocab_file is not None)
-    assert (train_trg is not None) or (trg_vocab_file is not None)
+    assert src_vocab_file is not None
+    assert trg_vocab_file is not None
 
     logger.info("Building vocabulary...")
     src_vocab = build_vocab(min_freq=src_min_freq, max_size=src_max_size,
-                            tokens=train_src, vocab_file=src_vocab_file)
+                            vocab_file=src_vocab_file)
     trg_vocab = build_vocab(min_freq=trg_min_freq, max_size=trg_max_size,
-                            tokens=train_trg, vocab_file=trg_vocab_file)
+                            vocab_file=trg_vocab_file)
     assert src_vocab.pad_index == trg_vocab.pad_index
     assert src_vocab.bos_index == trg_vocab.bos_index
     assert src_vocab.eos_index == trg_vocab.eos_index
 
+    # build sentencepiece tokenizer
+    src_tokenizer = Tokenizer(src_vocab, **data_cfg["spm_src"])
+    trg_tokenizer = Tokenizer(trg_vocab, **data_cfg["spm_trg"])
+
     if train_data is not None:
-        train_data.src_padding = src_vocab.sentences_to_ids
-        train_data.trg_padding = trg_vocab.sentences_to_ids
+        train_data.tokenizer = {'src': src_tokenizer,
+                                'trg': trg_tokenizer}
+        train_data.padding = {'src': src_vocab.sentences_to_ids,
+                              'trg': trg_vocab.sentences_to_ids}
 
     dev_data = None
     if "dev" in datasets and dev_path is not None:
         logger.info("Loading dev data...")
-        dev_src, dev_trg = read_data_file(path=Path(dev_path),
-                                          exts=(src_lang, trg_lang),
-                                          level=level,
-                                          lowercase=lowercase,
-                                          num_workers=num_workers)
-        dev_data = TranslationDataset(dev_src, dev_trg,
+        dev_data = TranslationDataset(path=Path(dev_path),
+                                      exts=(src_lang, trg_lang),
+                                      lowercase=lowercase,
+                                      is_train=False,
+                                      src_tokenizer=src_tokenizer,
+                                      trg_tokenizer=trg_tokenizer,
                                       src_padding=src_vocab.sentences_to_ids,
                                       trg_padding=trg_vocab.sentences_to_ids)
 
@@ -146,12 +134,12 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
         if not Path(f'{test_path}.{trg_lang}').is_file():
             # no target is given -> create dataset from src only
             trg_lang = None
-        test_src, test_trg = read_data_file(path=Path(test_path),
-                                            exts=(src_lang, trg_lang),
-                                            level=level,
-                                            lowercase=lowercase,
-                                            num_workers=num_workers)
-        test_data = TranslationDataset(test_src, test_trg,
+        test_data = TranslationDataset(path=Path(test_path),
+                                       exts=(src_lang, trg_lang),
+                                       lowercase=lowercase,
+                                       is_train=False,
+                                       src_tokenizer=src_tokenizer,
+                                       trg_tokenizer=trg_tokenizer,
                                        src_padding=src_vocab.sentences_to_ids,
                                        trg_padding=trg_vocab.sentences_to_ids)
 
@@ -160,86 +148,6 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     return src_vocab, trg_vocab, train_data, dev_data, test_data
 
 
-# should locate in top-level (global scope)
-def _apply(df: pd.DataFrame, level: str = "bpe", lowercase: bool = True,
-           max_len: int = -1) -> pd.DataFrame:
-    tok_fn = partial(_tokenize, level=level, lowercase=lowercase)
-    filter_fn = partial(_filter, max_len=max_len)
-    df['src_tok'] = df['src'].apply(tok_fn)
-    df['src_mask'] = df['src_tok'].apply(filter_fn)
-    if 'trg' in df.columns:
-        df['trg_tok'] = df['trg'].apply(tok_fn)
-        df['trg_mask'] = df['trg_tok'].apply(filter_fn)
-    return df
-
-
-# should locate in top-level (global scope)
-def _tokenize(x: str, level: str = "bpe", lowercase: bool = True):
-    x = x.strip().lower() if lowercase else x.strip()
-    return list(x) if level == "char" else x.split()
-
-# should locate in top-level (global scope)
-def _filter(tokens: List[str], max_len: int = -1):
-    return not len(tokens) > max_len > 0
-
-
-def read_data_file(path: Path, exts: Tuple[str, Union[str, None]],
-                   level: str, lowercase: bool, max_len: int = -1,
-                   num_workers: int = 0) \
-        -> Tuple[List[List[str]], List[List[str]]]:
-    """
-    Read data files
-    :param path: data file path
-    :param exts: pair of file extensions
-    :param level: tokenization
-    :param lowercase: whether to lowercase or not
-    :param max_len: maximum length (longer instances will be filtered out)
-    :param num_workers:
-    :return: pair of tokenized sentence lists
-    """
-    src_lang, trg_lang = exts
-    src_file = path.with_suffix(f'{path.suffix}.{src_lang}')
-    doc = {'src': src_file.read_text().splitlines()}
-    if trg_lang:
-        trg_file = path.with_suffix(f'{path.suffix}.{trg_lang}')
-        doc['trg'] = trg_file.read_text().splitlines()
-        assert len(doc['src']) == len(doc['trg'])
-
-    if 'pandas' in sys.modules:
-        df = pd.DataFrame.from_dict(doc)
-
-        if len(df) > num_workers > 1:
-            with torch.multiprocessing.Pool(processes=num_workers) as pool:
-                df = pd.concat(pool.map(partial(_apply,
-                                                level=level,
-                                                lowercase=lowercase,
-                                                max_len=max_len),
-                                        np.array_split(df, num_workers)))
-        else:
-            df = _apply(df, level=level, lowercase=lowercase, max_len=max_len)
-
-        invalid = df[~df['src_mask'] | ~df['trg_mask']].index if trg_lang \
-            else df[~df['src_mask']].index
-        if len(invalid) > 0:
-            df = df.drop(invalid, axis=0)
-            logger.warning('\t%d instances were filtered out.', len(invalid))
-        src_list = df['src_tok'].tolist()
-        trg_list = df['trg_tok'].tolist() if trg_lang else []
-    else:
-        # pandas-package not available
-        src_tok = [_tokenize(x, level, lowercase) for x in doc['src']]
-        if trg_lang:
-            trg_tok = [_tokenize(x, level, lowercase) for x in doc['trg']]
-            src_list, trg_list = zip(*[(s, t) for s, t in zip(src_tok, trg_tok)
-                                       if (_filter(s, max_len)
-                                           and _filter(t, max_len))])
-            assert len(src_list) == len(trg_list)
-        else:
-            src_list = [s for s in src_tok if _filter(s, max_len)]
-            trg_list = []
-    return src_list, trg_list
-
-# should locate in top-level (global scope)
 def collate_fn(batch, src_process, trg_process, pad_index, device) -> Batch:
     """
     custom collate function
@@ -253,12 +161,19 @@ def collate_fn(batch, src_process, trg_process, pad_index, device) -> Batch:
     :param device:
     :return: joeynmt batch object
     """
-    src_list, trg_list = zip(*batch)
-    src, src_length = src_process(src_list)
+    src_list, trg_list = [], []
+    for s, t in batch:
+        if s is not None:
+            src_list.append(s)
+            trg_list.append(t)
+    assert len(batch) == len(src_list), (len(batch), len(src_list))
+    src, src_length = src_process(src_list, bos=False, eos=True)
 
-    trg, trg_length = None, None
-    if any(t is not None for t in trg_list):
-        trg, trg_length = trg_process(trg_list)
+    if all(t is None for t in trg_list):
+        trg, trg_length = None, None
+    else:
+        assert all(t is not None for t in trg_list), trg_list
+        trg, trg_length = trg_process(trg_list, bos=True, eos=True)
 
     return Batch(torch.LongTensor(src),
                  torch.LongTensor(src_length),
@@ -300,80 +215,221 @@ def make_data_iter(dataset: TranslationDataset,
 
     # batch generator
     if batch_type == "sentence":
-        batch_sampler = BatchSampler(sampler,
-                                     batch_size=batch_size,
-                                     drop_last=False)
+        batch_sampler = SentenceBatchSampler(sampler,
+                                             batch_size=batch_size,
+                                             drop_last=False)
     elif batch_type == "token":
         batch_sampler = TokenBatchSampler(sampler,
                                           batch_size=batch_size,
                                           drop_last=False)
 
-    assert dataset.src_padding is not None
-    assert dataset.trg_padding is not None
+    assert dataset.padding['src'] is not None
+    assert dataset.padding['trg'] is not None
 
     # data iterator
     return DataLoader(dataset,
                       batch_sampler=batch_sampler,
                       collate_fn=partial(collate_fn,
-                                         src_process=dataset.src_padding,
-                                         trg_process=dataset.trg_padding,
+                                         src_process=dataset.padding['src'],
+                                         trg_process=dataset.padding['trg'],
                                          pad_index=pad_index,
                                          device=device),
                       num_workers=num_workers)
 
 
+def read_offsets(file_path: Path):
+    with file_path.open("r", encoding="utf-8") as f:
+        num = 0
+        offsets = [0]  # offsets list
+        line = f.readline()
+        while line and line != "\n":
+            num += 1
+            offsets.append(f.tell())
+            line = f.readline()
+    return offsets[:num]
+
+
 class TranslationDataset(Dataset):
     """
-    TranslationDataset which stores raw sentence pairs (tokenized)
+    TranslationDataset which stores raw sentence pairs
 
-    :param src: list of tokenized sentences in src language
-    :param trg: list of tokenized sentences in trg language
+    :param path: file name (w/o ext)
+    :param exts: file ext (language code pair)
+    :param lowercase: whether to lowercase
+    :param max_len: max length of an instance
+    :param is_train: bool indicator for train set or not
+    :param src_tokenizer: tokenizer for src
+    :param trg_tokenizer: tokenizer for trg
     :param src_padding: padding function for src
     :param trg_padding: padding function for trg
     """
-    def __init__(self, src: List[List[str]], trg: List[List[str]] = None,
+    def __init__(self, path: Path, exts: Tuple[str, Union[str, None]],
+                 lowercase: bool = False, max_len: max_len = -1, is_train: bool = False,
+                 src_tokenizer: Tokenizer = None, trg_tokenizer: Tokenizer = None,
                  src_padding: Callable = None, trg_padding: Callable = None):
-        if isinstance(trg, list) and len(trg) == 0:
-            trg = None
-        if trg is not None:
-            assert len(src) == len(trg)
-        self.src = src
-        self.trg = trg
+        src_lang, trg_lang = exts
+        self.has_trg = False if trg_lang is None else True
 
-        # assigned after vocab is built
-        self.src_padding = src_padding
-        self.trg_padding = trg_padding
+        # tokenizers
+        self.tokenizer = {'src': src_tokenizer, 'trg': trg_tokenizer}
 
-    def token_batch_size_fn(self, idx) -> int:
-        """
-        count num of tokens (used for shaping minibatch based on token count)
+        # load data and store offsets of line breaks
+        self.file_path = {'src': path.with_suffix(f'{path.suffix}.{src_lang}')}
+        self.offsets = {'src': read_offsets(self.file_path['src'])}
 
-        :param idx:
-        :return: length
-        """
-        length = len(self.src[idx]) + 2  # +2 because of EOS_TOKEN and BOS_TOKEN
-        if self.trg:
-            length = max(length, len(self.trg[idx]) + 2)
-        return length
+        if self.has_trg:
+            self.file_path['trg'] = path.with_suffix(f'{path.suffix}.{trg_lang}')
+            self.offsets['trg'] = read_offsets(self.file_path['trg'])
+            assert len(self.offsets['src']) == len(self.offsets['trg'])
+
+        # preprocessing
+        self.lowercase = lowercase
+        self.max_len = max_len
+        self.is_train = is_train
+        if self.is_train:
+            assert self.has_trg
+
+        # padding func: will be assigned after vocab is built
+        self.padding = {'src': src_padding, 'trg': trg_padding}
+
+        # file io objects
+        self.file_objects = {'src': open(
+            self.file_path['src'], "r", encoding="utf-8")}
+        if self.has_trg:
+            self.file_objects['trg'] = open(
+                self.file_path['trg'], "r", encoding="utf-8")
+
+        # place holder
+        self.cache = {}
+
+    def get_item(self, idx: int, side: str, sample: bool = False,
+                 filter_by_length: bool = False) -> List[str]:
+        self.file_objects[side].seek(self.offsets[side][idx]) # seek line break
+        line = self.file_objects[side].readline().rstrip('\n')
+        if self.lowercase:
+            line = line.lower()
+        item = self.tokenizer[side](line, sample=sample)
+        if filter_by_length and len(item) > self.max_len:
+            item = None
+        return item
+
+    def open_file(self):
+        for side, file_io in self.file_objects.items():
+            if file_io.closed:
+                self.file_objects[side] = open(
+                    self.file_path[side], "r", encoding="utf-8")
+            assert self.file_objects[side].closed is False
+
+    def close_file(self):
+        for side, file_io in self.file_objects.items():
+            if not file_io.closed:
+                self.file_objects[side].close()
+            assert self.file_objects[side].closed is True
+
+    def cache_item_pair(self, idx: int) -> int:
+        src, trg = None, None
+        src = self.get_item(idx=idx, side='src', sample=self.is_train,
+                            filter_by_length=self.is_train and self.max_len > 0)
+        if self.has_trg:
+            trg = self.get_item(idx=idx, side='trg', sample=self.is_train,
+                            filter_by_length=self.is_train and self.max_len > 0)
+            if trg is None:
+                src = None
+        n_tokens = 0 if src is None else max(0 if src is None else len(src),
+                                             0 if trg is None else len(trg))
+        self.cache[idx] = (src, trg)
+        return n_tokens
 
     def __getitem__(self, idx: int) -> Tuple[List[str], Optional[List[str]]]:
-        """
-        raise a raw instance
-
-        :param idx: index
-        :return: pair of tokenized sentences
-        """
-        src = self.src[idx]
-        trg = self.trg[idx] if self.trg else None
+        # pass through
+        assert idx in self.cache
+        src, trg = self.cache[idx]
+        del self.cache[idx]
         return src, trg
 
+    def get_raw_texts(self) -> Tuple[List[str], List[str]]:
+        if len(self.offsets['src']) > 100000:
+            logger.warning("This might raise a memory error.")
+        src_list = self.file_path['src'].read_text().splitlines()
+        if self.lowercase:
+            src_list = [item.lower() for item in src_list]
+
+        trg_list = []
+        if self.has_trg:
+            trg_list = self.file_path['trg'].read_text().splitlines()
+            if self.lowercase:
+                trg_list = [item.lower() for item in trg_list]
+        return src_list, trg_list
+
     def __len__(self) -> int:
-        return len(self.src)
+        return len(self.offsets['src'])
 
     def __repr__(self) -> str:
-        return "%s(len(src)=%s, len(trg)=%s)" % (
-            self.__class__.__name__, len(self.src),
-            len(self.trg) if self.trg else 0)
+        return "%s(len(src)=%s, len(trg)=%s, is_train=%r, lowercase=%s, " \
+               "max_len=%d)" % (self.__class__.__name__, len(self.offsets['src']),
+                                len(self.offsets['trg']) if self.has_trg else 0,
+                                self.is_train, self.lowercase, self.max_len)
+
+
+class MonoDataset(Dataset):
+    """
+    MonoDataset which stores raw input sentences
+
+    :param lowercase: whether to lowercase
+    :param src_tokenizer: tokenizer for src
+    :param src_padding: padding function for src
+    """
+    def __init__(self, lowercase: bool = False, src_tokenizer: Tokenizer = None,
+                 src_padding: Callable = None):
+        self.has_trg = False
+
+        # tokenizer
+        self.tokenizer = {'src': src_tokenizer}
+
+        # preprocessing
+        self.lowercase = lowercase
+        self.max_len = -1
+        self.is_train = False
+
+        # padding func: will be assigned after vocab is built
+        self.padding = {'src': src_padding}
+
+        # place holder
+        self.cache = {}
+
+        def set_item(self, line: str):
+            idx = len(self.cache)
+            if self.lowercase:
+                line = line.lower()
+            item = self.tokenizer['src'](line, sample=False)
+            self.cache[idx] = item
+
+        def cache_item_pair(self, idx: int) -> int:
+            assert idx in self.cache
+            return len(self.cache[idx])
+
+        def __getitem__(self, idx: int) -> Tuple[List[str], Optional[List[str]]]:
+            # pass through
+            assert idx in self.cache
+            return self.cache[idx], None
+
+
+class SentenceBatchSampler(BatchSampler):
+    def __init__(self, sampler: Sampler, batch_size: int, drop_last: bool):
+        super().__init__(sampler, batch_size, drop_last)
+
+    def __iter__(self):
+        batch = []
+        d = self.sampler.data_source
+        for idx in self.sampler:
+            n_tokens = d.cache_item_pair(idx)
+            if n_tokens > 0: # otherwise drop instance
+                batch.append(idx)
+                if len(batch) >= self.batch_size:
+                    yield batch
+                    batch = []
+        if len(batch) > 0 and not self.drop_last:
+            yield batch
 
 
 class TokenBatchSampler(BatchSampler):
@@ -392,17 +448,49 @@ class TokenBatchSampler(BatchSampler):
 
     def __iter__(self):
         batch = []
-        max_len = 0
+        max_tokens = 0
+        d = self.sampler.data_source
         for idx in self.sampler:
-            batch.append(idx)
-            n_tokens = self.sampler.data_source.token_batch_size_fn(idx)
-            max_len = max(max_len, n_tokens)
-            if max_len * len(batch) >= self.batch_size:
-                yield batch
-                batch = []
-                max_len = 0
+            n_tokens = d.cache_item_pair(idx)
+            if n_tokens > 0: # otherwise drop instance
+                batch.append(idx)
+                max_tokens = max(max_tokens, n_tokens)
+                if max_tokens * len(batch) >= self.batch_size:
+                    yield batch
+                    batch = []
+                    max_tokens = 0
         if len(batch) > 0 and not self.drop_last:
             yield batch
 
     def __len__(self):
         raise NotImplementedError
+
+
+class Tokenizer:
+    def __init__(self, vocab: Vocabulary, model_file: str,
+                 enable_sampling: bool = True, alpha: float = 0.1,
+                 nbest_size: int = -1):
+        self.sp = spm.SentencePieceProcessor(model_file=model_file)
+        self.sp.SetVocabulary(vocab._itos)
+
+        self.enable_sampling = enable_sampling
+        self.alpha = alpha
+        self.nbest_size = nbest_size
+
+    def __call__(self, raw_input: str, sample: bool = False) -> List[str]:
+        if sample:
+            tokenized = self.sp.encode(raw_input, out_type=str,
+                                       enable_sampling=self.enable_sampling,
+                                       alpha=self.alpha,
+                                       nbest_size=self.nbest_size)
+        else:
+            tokenized = self.sp.encode(raw_input, out_type=str)
+        return tokenized
+
+    def post_process(self, output: List[str]) -> str:
+        # return "".join(output).replace(" ", "").replace("▁", " ").strip()
+        return self.sp.decode(output)
+
+    def __repr__(self):
+        return "%s(sp=%r)" % (self.__class__.__name__,
+                              self.sp.__class__.__name__)

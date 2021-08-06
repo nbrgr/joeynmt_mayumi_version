@@ -25,7 +25,7 @@ from joeynmt.builders import build_gradient_clipper, build_optimizer, \
 from joeynmt.data import TranslationDataset, load_data, make_data_iter
 from joeynmt.helpers import ConfigurationError, delete_ckpt, load_checkpoint, \
     load_config, log_cfg, make_logger, make_model_dir, set_seed, \
-    store_attention_plots, symlink_update
+    store_attention_plots, symlink_update, write_list_to_file
 from joeynmt.loss import XentLoss
 from joeynmt.model import Model, _DataParallel, build_model
 from joeynmt.prediction import test, validate_on_data
@@ -130,7 +130,6 @@ class TrainManager:
 
         # eval options
         test_config = config["testing"]
-        self.bpe_type = test_config.get("bpe_type", "subword-nmt")
         self.sacrebleu = {"remove_whitespace": True, "tokenize": "13a"}
         if "sacrebleu" in config["testing"].keys():
             self.sacrebleu["remove_whitespace"] = test_config["sacrebleu"] \
@@ -146,10 +145,6 @@ class TrainManager:
             hidden_size=config["model"]["encoder"]["hidden_size"])
 
         # data & batch handling
-        self.level = config["data"]["level"]
-        if self.level not in ["word", "bpe", "char"]:
-            raise ConfigurationError("Invalid segmentation level. "
-                                     "Valid options: 'word', 'bpe', 'char'.")
         self.seed = train_config.get("random_seed", 42)
         self.shuffle = train_config.get("shuffle", True)
         self.epochs = train_config["epochs"]
@@ -447,9 +442,10 @@ class TrainManager:
                     if self.clip_grad_fun is not None:
                         if self.fp16:
                             self.clip_grad_fun(
-                                params=amp.master_params(self.optimizer))
+                                parameters=amp.master_params(self.optimizer))
                         else:
-                            self.clip_grad_fun(params=self.model.parameters())
+                            self.clip_grad_fun(
+                                parameters=self.model.parameters())
 
                     # make gradient step
                     self.optimizer.step()
@@ -457,7 +453,7 @@ class TrainManager:
                     # decay lr
                     if self.scheduler is not None \
                             and self.scheduler_step_at == "step":
-                        self.scheduler.step()
+                        self.scheduler.step(step=self.stats.steps)
 
                     # reset gradients
                     self.model.zero_grad()
@@ -485,7 +481,7 @@ class TrainManager:
 
                     # Only add complete loss of full mini-batch to epoch_loss
                     epoch_loss += batch_loss  # accumulate epoch_loss
-                    batch_loss = 0  # rest batch_loss
+                    batch_loss = 0  # reset batch_loss
 
                     # validate on the entire dev set
                     if self.stats.steps % self.validation_freq == 0:
@@ -519,6 +515,8 @@ class TrainManager:
                     self.early_stopping_metric)
 
         self.tb_writer.close()  # close Tensorboard writer
+        train_data.close_file()
+        valid_data.close_file()
 
     def _train_step(self, batch: Batch) -> Tensor:
         """
@@ -572,23 +570,21 @@ class TrainManager:
         valid_start_time = time.time()
 
         (valid_score, valid_loss, valid_ppl, valid_sources, valid_references,
-         valid_hypotheses, valid_hypotheses_raw, valid_attention_scores) = \
-            validate_on_data(
+         valid_hypotheses, valid_hypotheses_raw, valid_attention_scores) \
+            = validate_on_data(
                 batch_size=self.eval_batch_size,
                 data=valid_data,
                 eval_metric=self.eval_metric,
-                level=self.level,
                 model=self.model,
                 device=self.device,
                 max_output_length=self.max_output_length,
                 compute_loss=True,
                 beam_size=1,                # greedy validations
                 batch_type=self.eval_batch_type,
-                postprocess=True,           # always remove BPE for validation
-                bpe_type=self.bpe_type,     # "subword-nmt" or "sentencepiece"
                 sacrebleu=self.sacrebleu,   # sacrebleu options
-                n_gpu=self.n_gpu
-            )
+                n_gpu=self.n_gpu,
+                n_best=1
+        )
 
         self.tb_writer.add_scalar("valid/valid_loss", valid_loss,
                                   self.stats.steps)
@@ -605,7 +601,7 @@ class TrainManager:
             ckpt_score = valid_score
 
         if self.scheduler_step_at == "validation":
-            self.scheduler.step(ckpt_score)
+            self.scheduler.step(metrics=ckpt_score)
 
         # update new best
         new_best = self.stats.is_best(ckpt_score)
@@ -627,12 +623,11 @@ class TrainManager:
                          valid_ppl=valid_ppl,
                          new_best=new_best)
 
-        self._log_examples(sources_raw=valid_data.src,
-                           sources=valid_sources,
-                           hypotheses_raw=valid_hypotheses_raw,
+        self._log_examples(sources=valid_sources,
+                           references=valid_references,
                            hypotheses=valid_hypotheses,
-                           references_raw=valid_data.trg,
-                           references=valid_references)
+                           hypotheses_raw=valid_hypotheses_raw,
+                           data=valid_data)
 
         valid_duration = time.time() - valid_start_time
         logger.info(
@@ -642,14 +637,15 @@ class TrainManager:
             valid_score, valid_loss, valid_ppl, valid_duration)
 
         # store validation set outputs
-        self._store_outputs(valid_hypotheses)
+        write_list_to_file(self.model_dir / f"{self.stats.steps}.hyps",
+                           valid_hypotheses)
 
         # store attention plots for selected valid sentences
         if valid_attention_scores:
             store_attention_plots(
                 attentions=valid_attention_scores,
                 targets=valid_hypotheses_raw,
-                sources=valid_data.src,
+                sources=data.tokenizer['src'](valid_sources),
                 indices=self.log_valid_sents,
                 output_prefix=(self.model_dir / f"att.{self.stats.steps}"
                                ).as_posix(),
@@ -686,18 +682,16 @@ class TrainManager:
                       sources: List[str],
                       hypotheses: List[str],
                       references: List[str],
-                      sources_raw: List[List[str]] = None,
-                      hypotheses_raw: List[List[str]] = None,
-                      references_raw: List[List[str]] = None) -> None:
+                      hypotheses_raw: List[List[str]],
+                      data: TranslationDataset) -> None:
         """
         Log a the first `self.log_valid_sents` sentences from given examples.
 
         :param sources: decoded sources (list of strings)
         :param hypotheses: decoded hypotheses (list of strings)
         :param references: decoded references (list of strings)
-        :param sources_raw: raw sources (list of list of tokens)
         :param hypotheses_raw: raw hypotheses (list of list of tokens)
-        :param references_raw: raw references (list of list of tokens)
+        :param data: TranslationDataset
         """
         for p in self.log_valid_sents:
 
@@ -705,17 +699,16 @@ class TrainManager:
                 continue
 
             logger.info("Example #%d", p)
+            # tokenized text
+            logger.debug("\tRaw source:     %s", data.get_item(idx=p, side='src'))
+            logger.debug("\tRaw reference:  %s", data.get_item(idx=p, side='trg'))
+            logger.debug("\tRaw hypothesis: %s", hypotheses_raw[p])
 
-            if sources_raw is not None:
-                logger.debug("\tRaw source:     %s", sources_raw[p])
-            if references_raw is not None:
-                logger.debug("\tRaw reference:  %s", references_raw[p])
-            if hypotheses_raw is not None:
-                logger.debug("\tRaw hypothesis: %s", hypotheses_raw[p])
-
+            # post-processed text
             logger.info("\tSource:     %s", sources[p])
             logger.info("\tReference:  %s", references[p])
             logger.info("\tHypothesis: %s", hypotheses[p])
+
 
     class TrainStatistics:
         def __init__(self,
