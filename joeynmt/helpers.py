@@ -31,6 +31,9 @@ if TYPE_CHECKING:
 
 class ConfigurationError(Exception):
     """ Custom exception for misspecifications of configuration """
+    def __init__(self, message, logger):
+        super().__init__(message)
+        logger.error(message)
 
 
 def make_model_dir(model_dir: Path, overwrite: bool = False) -> Path:
@@ -197,25 +200,15 @@ def write_list_to_file(output_path: Path, array: List[str]) -> None:
             opened_file.write(f"{entry}\n")
 
 
-def bpe_postprocess(string, bpe_type="subword-nmt") -> str:
+def read_list_from_file(input_path: Path) -> List[str]:
     """
-    Post-processor for BPE output. Recombines BPE-split tokens.
+    Read list of str from file in `input_path`.
 
-    :param string:
-    :param bpe_type: one of {"sentencepiece", "subword-nmt"}
-    :return: post-processed string
+    :param input_path: input file path
+    :return: list of strings
     """
-    if bpe_type == "sentencepiece":
-        ret = string.replace(" ", "").replace("▁", " ").strip()
-    elif bpe_type == "subword-nmt":
-        # Remove merge markers within the sentence.
-        ret = string.replace("@@ ", "").strip()
-        # Remove final merge marker.
-        if ret.endswith("@@"):
-            ret = ret[:-2]
-    else:
-        ret = string.strip()
-    return ret
+    return [line.rstrip("\n") for line in
+            input_path.read_text(encoding='utf-8').splitlines()]
 
 
 def store_attention_plots(attentions: np.ndarray,

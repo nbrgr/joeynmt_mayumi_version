@@ -18,8 +18,9 @@ def chrf(hypotheses: List[str], references: List[str],
     :param remove_whitespace: (bool)
     :return:
     """
-    return sacrebleu.corpus_chrf(hypotheses=hypotheses, references=[references],
-                                 remove_whitespace=remove_whitespace).score
+    chf = sacrebleu.corpus_chrf(hypotheses=hypotheses, references=[references],
+                                remove_whitespace=remove_whitespace).score
+    return chf / 100
 
 
 def bleu(hypotheses: List[str], references: List[str], tokenize: str = "13a") \
@@ -32,8 +33,8 @@ def bleu(hypotheses: List[str], references: List[str], tokenize: str = "13a") \
     :param tokenize: one of {'none', '13a', 'intl', 'zh', 'ja-mecab'}
     :return:
     """
-    return sacrebleu.corpus_bleu(sys_stream=hypotheses,
-                                 ref_streams=[references],
+    return sacrebleu.corpus_bleu(hypotheses=hypotheses,
+                                 references=[references],
                                  tokenize=tokenize).score
 
 

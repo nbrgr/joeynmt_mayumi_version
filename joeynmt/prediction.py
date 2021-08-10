@@ -12,9 +12,10 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from joeynmt.data import TranslationDataset, load_data, make_data_iter
-from joeynmt.helpers import bpe_postprocess, expand_reverse_index, \
-    load_checkpoint, load_config, make_logger, resolve_ckpt_path, \
+from joeynmt.data import BasicTokenizer, MonoDataset, SentencePieceTokenizer, \
+    load_data, make_data_iter
+from joeynmt.helpers import expand_reverse_index, load_checkpoint, \
+    load_config, make_logger, read_list_from_file, resolve_ckpt_path, \
     store_attention_plots, write_list_to_file
 from joeynmt.metrics import bleu, chrf, sequence_accuracy, token_accuracy
 from joeynmt.model import Model, _DataParallel, build_model
@@ -35,8 +36,6 @@ def validate_on_data(model: Model,
                      beam_size: int = 1,
                      beam_alpha: int = -1,
                      batch_type: str = "sentence",
-                     postprocess: bool = True,
-                     bpe_type: str = "subword-nmt",
                      sacrebleu: dict = None,
                      n_best: int = 1) \
         -> Tuple[float, float, float, List[str], List[str], List[str],
@@ -213,8 +212,8 @@ def parse_test_args(cfg, mode="test"):
     if "testing" in cfg.keys():
         beam_size = cfg["testing"].get("beam_size", 1) # positive integer only
         beam_alpha = cfg["testing"].get("alpha", -1)
-        postprocess = cfg["testing"].get("postprocess", True)
-        bpe_type = cfg["testing"].get("bpe_type", "subword-nmt")
+        #postprocess = cfg["testing"].get("postprocess", True)
+        #bpe_type = cfg["testing"].get("bpe_type", "subword-nmt")
         sacrebleu = {"remove_whitespace": True, "tokenize": "13a"}
         if "sacrebleu" in cfg["testing"].keys():
             sacrebleu["remove_whitespace"] = cfg["testing"]["sacrebleu"] \
@@ -225,14 +224,15 @@ def parse_test_args(cfg, mode="test"):
     else:
         beam_size = 1
         beam_alpha = -1
-        postprocess = True
-        bpe_type = "subword-nmt"
+        #postprocess = True
+        #bpe_type = "subword-nmt"
         sacrebleu = {"remove_whitespace": True, "tokenize": "13a"}
 
     decoding_description = "Greedy decoding" if beam_size < 2 else \
         f"Beam search decoding with beam size = {beam_size} " \
         f"and alpha = {beam_alpha}"
-    tokenizer_info = f" [{sacrebleu['tokenize']}]" if eval_metric == "bleu" else ""
+    tokenizer_info = f"[{sacrebleu['tokenize']}]" \
+        if eval_metric == "bleu" else ""
 
     # caution: batch_size divided by beam_size, because a batch will be expanded
     # to batch.nseqs * beam_size, and it could cause an out-of-memory error.
@@ -245,7 +245,7 @@ def parse_test_args(cfg, mode="test"):
 
 
 def test(cfg_file,
-         ckpt: str,
+         ckpt: str = None,
          output_path: str = None,
          save_attention: bool = False,
          datasets: dict = None) -> None:
@@ -376,7 +376,7 @@ def translate(cfg_file: str,
     :param output_path: path to output file
     :param n_best: amount of candidates to display
     """
-
+    # pylint: disable=too-many-branches
     def _translate_data(test_data):
         """ Translates given dataset, using parameters from outer scope. """
         _, _, _, _, _, hypotheses, _, _ = validate_on_data(
@@ -397,15 +397,16 @@ def translate(cfg_file: str,
                              model_dir)
 
     # read vocabs
-    src_vocab_file = cfg["data"].get("src_vocab", model_dir / "src_vocab.txt")
-    trg_vocab_file = cfg["data"].get("trg_vocab", model_dir / "trg_vocab.txt")
-    src_vocab = Vocabulary(file=Path(src_vocab_file))
-    trg_vocab = Vocabulary(file=Path(trg_vocab_file))
+    src_tokens = read_list_from_file(
+        Path(cfg["data"].get("src_vocab", model_dir / "src_vocab.txt")))
+    trg_tokens = read_list_from_file(
+        Path(cfg["data"].get("trg_vocab", model_dir / "trg_vocab.txt")))
+    src_vocab = Vocabulary(src_tokens)
+    trg_vocab = Vocabulary(trg_tokens)
 
     # parse test args
-    batch_size, batch_type, device, n_gpu, eval_metric, max_output_length, \
-    beam_size, beam_alpha, sacrebleu, decoding_description, tokenizer_info \
-        = parse_test_args(cfg, mode="translate")
+    batch_size, batch_type, device, n_gpu, _, max_output_length, beam_size, \
+    beam_alpha, sacrebleu, _, _  = parse_test_args(cfg, mode="translate")
 
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
@@ -417,9 +418,19 @@ def translate(cfg_file: str,
     if device.type == "cuda":
         model.to(device)
 
-    src_tokenizer = Tokenizer(src_vocab, **cfg["data"]["spm_src"])
+    tokenizer = {}
+    if cfg["data"]["level"] == "bpe":
+        if cfg["data"]["bpe_type"] == "sentencepiece":
+            tokenizer['src'] = SentencePieceTokenizer(src_vocab,
+                                                      **cfg["data"]["src_spm"])
+            tokenizer['trg'] = SentencePieceTokenizer(trg_vocab,
+                                                      **cfg["data"]["trg_spm"])
+    else:
+        basic_tokenizer = BasicTokenizer(level=cfg["data"]["level"])
+        tokenizer = {'src': basic_tokenizer, 'trg': basic_tokenizer}
     test_data = MonoDataset(lowercase=cfg["data"]["lowercase"],
-                            src_tokenizer=src_tokenizer,
+                            src_tokenizer=tokenizer['src'],
+                            trg_tokenizer=tokenizer['trg'],
                             src_padding=src_vocab.sentences_to_ids)
 
     if not sys.stdin.isatty():
@@ -460,8 +471,7 @@ def translate(cfg_file: str,
         batch_type = "sentence"
         while True:
             try:
-                src_input = input("\nPlease enter a source sentence "
-                                  "(pre-processed): \n")
+                src_input = input("\nPlease enter a source sentence: \n")
                 if not src_input.strip():
                     break
 

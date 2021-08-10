@@ -10,7 +10,6 @@ from pathlib import Path
 import sys
 from typing import Callable, List, Optional, Tuple, Union
 
-import numpy as np
 import sentencepiece as spm
 
 import torch
@@ -19,7 +18,8 @@ from torch.utils.data import BatchSampler, DataLoader, Dataset, \
 
 from joeynmt.batch import Batch
 from joeynmt.constants import PAD_ID
-from joeynmt.helpers import log_data_info, write_list_to_file
+from joeynmt.helpers import ConfigurationError, log_data_info, \
+    read_list_from_file
 from joeynmt.vocabulary import Vocabulary, build_vocab
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ except RuntimeError as e:
                  e)
 
 
-def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
+def load_data(data_cfg: dict, datasets: list = None) \
         -> Tuple[Vocabulary, Vocabulary, Optional[Dataset], Optional[Dataset],
                  Optional[Dataset]]:
     """
@@ -51,7 +51,6 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     :param data_cfg: configuration dictionary for data
         ("data" part of configuration file)
     :param datasets: list of dataset names to load
-    :param num_workers:
     :returns:
         - src_vocab: source vocabulary extracted from training data
         - trg_vocab: target vocabulary extracted from training data
@@ -72,8 +71,10 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     if train_path is None and dev_path is None and test_path is None:
         raise ValueError('Please specify at least one data source path.')
 
-    lowercase = data_cfg["lowercase"]
-    max_len = data_cfg["max_sent_length"]
+    lowercase = data_cfg.get("lowercase", False)
+    max_len = data_cfg.get("max_sent_length", -1)
+    level = data_cfg["level"]
+    bpe_type = data_cfg.get("bpe_type", "sentencepiece")
 
     train_data = None
     if "train" in datasets and train_path is not None:
@@ -88,30 +89,46 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     trg_max_size = data_cfg.get("trg_voc_limit", sys.maxsize)
     trg_min_freq = data_cfg.get("trg_voc_min_freq", 1)
 
-    src_vocab_file = data_cfg.get("src_vocab", None)
-    trg_vocab_file = data_cfg.get("trg_vocab", None)
-    src_vocab_file = None if src_vocab_file is None else Path(src_vocab_file)
-    trg_vocab_file = None if trg_vocab_file is None else Path(trg_vocab_file)
+    def _build(src_sents, trg_sents, src_vocab_file, trg_vocab_file):
+        logger.info("Building vocabulary...")
+        src_vocab = build_vocab(min_freq=src_min_freq, max_size=src_max_size,
+                                tokens=src_sents, vocab_file=src_vocab_file)
+        trg_vocab = build_vocab(min_freq=trg_min_freq, max_size=trg_max_size,
+                                tokens=trg_sents, vocab_file=trg_vocab_file)
+        assert src_vocab.pad_index == trg_vocab.pad_index
+        assert src_vocab.bos_index == trg_vocab.bos_index
+        assert src_vocab.eos_index == trg_vocab.eos_index
+        return src_vocab, trg_vocab
 
-    assert src_vocab_file is not None
-    assert trg_vocab_file is not None
-
-    logger.info("Building vocabulary...")
-    src_vocab = build_vocab(min_freq=src_min_freq, max_size=src_max_size,
-                            vocab_file=src_vocab_file)
-    trg_vocab = build_vocab(min_freq=trg_min_freq, max_size=trg_max_size,
-                            vocab_file=trg_vocab_file)
-    assert src_vocab.pad_index == trg_vocab.pad_index
-    assert src_vocab.bos_index == trg_vocab.bos_index
-    assert src_vocab.eos_index == trg_vocab.eos_index
-
-    # build sentencepiece tokenizer
-    src_tokenizer = Tokenizer(src_vocab, **data_cfg["spm_src"])
-    trg_tokenizer = Tokenizer(trg_vocab, **data_cfg["spm_trg"])
+    # build tokenizer
+    if level == "bpe":
+        tokenizer = {}
+        if bpe_type == "sentencepiece":
+            src_vocab, trg_vocab = _build(None, None,
+                                          Path(data_cfg["src_vocab"]),
+                                          Path(data_cfg["trg_vocab"]))
+            tokenizer['src'] = SentencePieceTokenizer(vocab=src_vocab,
+                                                      **data_cfg["src_spm"])
+            tokenizer['trg'] = SentencePieceTokenizer(vocab=trg_vocab,
+                                                      **data_cfg["trg_spm"])
+        else:
+            raise ConfigurationError("We currently support sentencepiece bpe"
+                                     " only.", logger)
+            # TODO: support subword-nmt
+    elif level in ["word", "char"]:
+        basic_tokenizer = BasicTokenizer(level=level)
+        src_list, trg_list = train_data.get_raw_texts()
+        src_sents = [basic_tokenizer(sent) for sent in src_list]
+        trg_sents = [basic_tokenizer(sent) for sent in trg_list]
+        src_vocab, trg_vocab = _build(src_sents, trg_sents, None, None)
+        tokenizer = {'src': basic_tokenizer, 'trg': basic_tokenizer}
+    else:
+        raise ConfigurationError("Invalid tokenization level. Valid options:"
+                                 " 'bpe', 'word', 'char'.", logger)
+        # TODO: support different src tokenization from trg
 
     if train_data is not None:
-        train_data.tokenizer = {'src': src_tokenizer,
-                                'trg': trg_tokenizer}
+        train_data.tokenizer = tokenizer
         train_data.padding = {'src': src_vocab.sentences_to_ids,
                               'trg': trg_vocab.sentences_to_ids}
 
@@ -122,8 +139,8 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
                                       exts=(src_lang, trg_lang),
                                       lowercase=lowercase,
                                       is_train=False,
-                                      src_tokenizer=src_tokenizer,
-                                      trg_tokenizer=trg_tokenizer,
+                                      src_tokenizer=tokenizer['src'],
+                                      trg_tokenizer=tokenizer['trg'],
                                       src_padding=src_vocab.sentences_to_ids,
                                       trg_padding=trg_vocab.sentences_to_ids)
 
@@ -138,8 +155,8 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
                                        exts=(src_lang, trg_lang),
                                        lowercase=lowercase,
                                        is_train=False,
-                                       src_tokenizer=src_tokenizer,
-                                       trg_tokenizer=trg_tokenizer,
+                                       src_tokenizer=tokenizer['src'],
+                                       trg_tokenizer=tokenizer['trg'],
                                        src_padding=src_vocab.sentences_to_ids,
                                        trg_padding=trg_vocab.sentences_to_ids)
 
@@ -173,6 +190,7 @@ def collate_fn(batch, src_process, trg_process, pad_index, device) -> Batch:
         trg, trg_length = None, None
     else:
         assert all(t is not None for t in trg_list), trg_list
+        assert trg_process is not None
         trg, trg_length = trg_process(trg_list, bos=True, eos=True)
 
     return Batch(torch.LongTensor(src),
@@ -224,34 +242,23 @@ def make_data_iter(dataset: TranslationDataset,
                                           drop_last=False)
 
     assert dataset.padding['src'] is not None
-    assert dataset.padding['trg'] is not None
+    if dataset.has_trg:
+        assert dataset.padding['trg'] is not None
 
     # data iterator
-    return DataLoader(dataset,
-                      batch_sampler=batch_sampler,
-                      collate_fn=partial(collate_fn,
-                                         src_process=dataset.padding['src'],
-                                         trg_process=dataset.padding['trg'],
-                                         pad_index=pad_index,
-                                         device=device),
-                      num_workers=num_workers)
-
-
-def read_offsets(file_path: Path):
-    with file_path.open("r", encoding="utf-8") as f:
-        num = 0
-        offsets = [0]  # offsets list
-        line = f.readline()
-        while line and line != "\n":
-            num += 1
-            offsets.append(f.tell())
-            line = f.readline()
-    return offsets[:num]
+    return DataLoader(
+        dataset, batch_sampler=batch_sampler,
+        collate_fn=partial(
+            collate_fn, src_process=dataset.padding['src'],
+            trg_process=dataset.padding['trg'] if dataset.has_trg else None,
+            pad_index=pad_index, device=device),
+        num_workers=num_workers)
 
 
 class TranslationDataset(Dataset):
     """
-    TranslationDataset which stores raw sentence pairs
+    TranslationDataset which stores raw sentence pairs.
+    used for file data.
 
     :param path: file name (w/o ext)
     :param exts: file ext (language code pair)
@@ -264,22 +271,35 @@ class TranslationDataset(Dataset):
     :param trg_padding: padding function for trg
     """
     def __init__(self, path: Path, exts: Tuple[str, Union[str, None]],
-                 lowercase: bool = False, max_len: max_len = -1, is_train: bool = False,
-                 src_tokenizer: Tokenizer = None, trg_tokenizer: Tokenizer = None,
+                 lowercase: bool = False, max_len: int = -1,
+                 is_train: bool = False, src_tokenizer: BasicTokenizer = None,
+                 trg_tokenizer: BasicTokenizer = None,
                  src_padding: Callable = None, trg_padding: Callable = None):
         src_lang, trg_lang = exts
-        self.has_trg = False if trg_lang is None else True
+        self.has_trg = trg_lang is not None
 
         # tokenizers
         self.tokenizer = {'src': src_tokenizer, 'trg': trg_tokenizer}
 
         # load data and store offsets of line breaks
+        def _read_offsets(file_path: Path) -> List[int]:
+            with file_path.open("r", encoding="utf-8") as f:
+                num = 0
+                offsets = [0]  # offsets list
+                line = f.readline()
+                while line and line != "\n":
+                    num += 1
+                    offsets.append(f.tell())
+                    line = f.readline()
+            return offsets[:num]
+
         self.file_path = {'src': path.with_suffix(f'{path.suffix}.{src_lang}')}
-        self.offsets = {'src': read_offsets(self.file_path['src'])}
+        self.offsets = {'src': _read_offsets(self.file_path['src'])}
 
         if self.has_trg:
-            self.file_path['trg'] = path.with_suffix(f'{path.suffix}.{trg_lang}')
-            self.offsets['trg'] = read_offsets(self.file_path['trg'])
+            self.file_path['trg'] = path.with_suffix(
+                f'{path.suffix}.{trg_lang}')
+            self.offsets['trg'] = _read_offsets(self.file_path['trg'])
             assert len(self.offsets['src']) == len(self.offsets['trg'])
 
         # preprocessing
@@ -293,6 +313,7 @@ class TranslationDataset(Dataset):
         self.padding = {'src': src_padding, 'trg': trg_padding}
 
         # file io objects
+        # pylint: disable=consider-using-with
         self.file_objects = {'src': open(
             self.file_path['src'], "r", encoding="utf-8")}
         if self.has_trg:
@@ -308,25 +329,13 @@ class TranslationDataset(Dataset):
         line = self.file_objects[side].readline().rstrip('\n')
         if self.lowercase:
             line = line.lower()
-        item = self.tokenizer[side](line, sample=sample)
+        item = self.tokenizer[side](line, sample)
         if filter_by_length and len(item) > self.max_len:
             item = None
         return item
 
-    def open_file(self):
-        for side, file_io in self.file_objects.items():
-            if file_io.closed:
-                self.file_objects[side] = open(
-                    self.file_path[side], "r", encoding="utf-8")
-            assert self.file_objects[side].closed is False
-
-    def close_file(self):
-        for side, file_io in self.file_objects.items():
-            if not file_io.closed:
-                self.file_objects[side].close()
-            assert self.file_objects[side].closed is True
-
     def cache_item_pair(self, idx: int) -> int:
+        """cache item pair of given index. called by BatchSampler."""
         src, trg = None, None
         src = self.get_item(idx=idx, side='src', sample=self.is_train,
                             filter_by_length=self.is_train and self.max_len > 0)
@@ -350,41 +359,61 @@ class TranslationDataset(Dataset):
     def get_raw_texts(self) -> Tuple[List[str], List[str]]:
         if len(self.offsets['src']) > 100000:
             logger.warning("This might raise a memory error.")
-        src_list = self.file_path['src'].read_text().splitlines()
+
+        src_list = read_list_from_file(self.file_path['src'])
         if self.lowercase:
             src_list = [item.lower() for item in src_list]
 
         trg_list = []
         if self.has_trg:
-            trg_list = self.file_path['trg'].read_text().splitlines()
+            trg_list = read_list_from_file(self.file_path['trg'])
             if self.lowercase:
                 trg_list = [item.lower() for item in trg_list]
         return src_list, trg_list
+
+    def open_file(self) -> None:
+        # pylint: disable=consider-using-with
+        for side, file_io in self.file_objects.items():
+            if file_io.closed:
+                self.file_objects[side] = open(
+                    self.file_path[side], "r", encoding="utf-8")
+            assert self.file_objects[side].closed is False
+
+    def close_file(self) -> None:
+        # pylint: disable=unnecessary-dict-index-lookup
+        for side, file_io in self.file_objects.items():
+            if not file_io.closed:
+                self.file_objects[side].close()
+            assert self.file_objects[side].closed is True
 
     def __len__(self) -> int:
         return len(self.offsets['src'])
 
     def __repr__(self) -> str:
         return "%s(len(src)=%s, len(trg)=%s, is_train=%r, lowercase=%s, " \
-               "max_len=%d)" % (self.__class__.__name__, len(self.offsets['src']),
+               "max_len=%d)" % (self.__class__.__name__,
+                                len(self.offsets['src']),
                                 len(self.offsets['trg']) if self.has_trg else 0,
                                 self.is_train, self.lowercase, self.max_len)
 
 
 class MonoDataset(Dataset):
     """
-    MonoDataset which stores raw input sentences
+    MonoDataset which stores raw input sentences.
+    used for stream data.
 
     :param lowercase: whether to lowercase
     :param src_tokenizer: tokenizer for src
     :param src_padding: padding function for src
     """
-    def __init__(self, lowercase: bool = False, src_tokenizer: Tokenizer = None,
+    def __init__(self, lowercase: bool = False,
+                 src_tokenizer: BasicTokenizer = None,
+                 trg_tokenizer: BasicTokenizer = None,
                  src_padding: Callable = None):
         self.has_trg = False
 
         # tokenizer
-        self.tokenizer = {'src': src_tokenizer}
+        self.tokenizer = {'src': src_tokenizer, 'trg': trg_tokenizer}
 
         # preprocessing
         self.lowercase = lowercase
@@ -397,24 +426,39 @@ class MonoDataset(Dataset):
         # place holder
         self.cache = {}
 
-        def set_item(self, line: str):
-            idx = len(self.cache)
-            if self.lowercase:
-                line = line.lower()
-            item = self.tokenizer['src'](line, sample=False)
-            self.cache[idx] = item
+    def set_item(self, line: str):
+        if self.lowercase:
+            line = line.lower()
+        item = self.tokenizer['src'](line, sample=False)
+        self.cache[0] = item
 
-        def cache_item_pair(self, idx: int) -> int:
-            assert idx in self.cache
-            return len(self.cache[idx])
+    def cache_item_pair(self, idx: int) -> int:
+        assert idx in self.cache
+        return len(self.cache[idx])
 
-        def __getitem__(self, idx: int) -> Tuple[List[str], Optional[List[str]]]:
-            # pass through
-            assert idx in self.cache
-            return self.cache[idx], None
+    def get_raw_texts(self) -> Tuple[List[str], List[str]]:
+        return [line for i, line in sorted(self.cache.items())], []
+
+    def __getitem__(self, idx: int) -> Tuple[List[str], Optional[List[str]]]:
+        # pass through
+        assert idx in self.cache
+        src = self.cache[idx]
+        return src, None
+
+    def __len__(self) -> int:
+        return len(self.cache)
 
 
 class SentenceBatchSampler(BatchSampler):
+    """
+    Wraps another sampler to yield a mini-batch of indices based on num of
+    instances. An instance longer than dataset.max_len will be filtered out.
+
+    :param sampler: Base sampler. Can be any iterable object
+    :param batch_size: Size of mini-batch.
+    :param drop_last: If ``True``, the sampler will drop the last batch if
+            its size would be less than ``batch_size``
+    """
     def __init__(self, sampler: Sampler, batch_size: int, drop_last: bool):
         super().__init__(sampler, batch_size, drop_last)
 
@@ -434,8 +478,9 @@ class SentenceBatchSampler(BatchSampler):
 
 class TokenBatchSampler(BatchSampler):
     """
-    Wraps another sampler to yield a mini-batch of indices
-    based on num of tokens (incl. padding).
+    Wraps another sampler to yield a mini-batch of indices based on num of
+    tokens (incl. padding). An instance longer than dataset.max_len will be
+    filtered out.
     * no bucketing implemented
 
     :param sampler: Base sampler. Can be any iterable object
@@ -466,10 +511,33 @@ class TokenBatchSampler(BatchSampler):
         raise NotImplementedError
 
 
-class Tokenizer:
-    def __init__(self, vocab: Vocabulary, model_file: str,
+class BasicTokenizer:
+    def __init__(self, level="word"):
+        self.level = level
+
+    def __call__(self, raw_input: str, sample: bool = False) -> List[str]:
+        if self.level=="word":
+            tokenized = raw_input.split(" ")
+        elif self.level=="char":
+            tokenized = list(raw_input)
+        return tokenized
+
+    def post_process(self, output: List[str]) -> str:
+        if self.level=="word":
+            detokenized = " ".join(output)
+        elif self.level=="char":
+            detokenized = "".join(output)
+        return detokenized
+
+    def __repr__(self):
+        return "%s(level=%r)" % (self.__class__.__name__, self.level)
+
+
+class SentencePieceTokenizer(BasicTokenizer):
+    def __init__(self, vocab: Vocabulary, model_file: str = "",
                  enable_sampling: bool = True, alpha: float = 0.1,
                  nbest_size: int = -1):
+        # pylint: disable=super-init-not-called,unexpected-keyword-arg
         self.sp = spm.SentencePieceProcessor(model_file=model_file)
         self.sp.SetVocabulary(vocab._itos)
 

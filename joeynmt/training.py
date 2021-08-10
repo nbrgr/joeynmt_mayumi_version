@@ -26,7 +26,6 @@ from joeynmt.data import TranslationDataset, load_data, make_data_iter
 from joeynmt.helpers import ConfigurationError, delete_ckpt, load_checkpoint, \
     load_config, log_cfg, make_logger, make_model_dir, set_seed, \
     store_attention_plots, symlink_update, write_list_to_file
-from joeynmt.loss import XentLoss
 from joeynmt.model import Model, _DataParallel, build_model
 from joeynmt.prediction import test, validate_on_data
 
@@ -69,14 +68,13 @@ class TrainManager:
         self.model.log_parameters_list()
 
         # objective
-        self.label_smoothing = train_config.get("label_smoothing", 0.0)
-        self.model.loss_function = XentLoss(pad_index=self.model.pad_index,
-                                            smoothing=self.label_smoothing)
+        self.model.loss_function = (train_config.get("loss", "crossentropy"),
+                                    train_config.get("label_smoothing", 0.0))
         self.normalization = train_config.get("normalization", "batch")
         if self.normalization not in ["batch", "tokens", "none"]:
             raise ConfigurationError("Invalid normalization option."
                                      "Valid options: "
-                                     "'batch', 'tokens', 'none'.")
+                                     "'batch', 'tokens', 'none'.", logger)
         logger.info(self.model)
 
         # optimization
@@ -105,7 +103,8 @@ class TrainManager:
         ]:
             raise ConfigurationError("Invalid setting for 'eval_metric', "
                                      "valid options: 'bleu', 'chrf', "
-                                     "'token_accuracy', 'sequence_accuracy'.")
+                                     "'token_accuracy', 'sequence_accuracy'.",
+                                     logger)
         self.early_stopping_metric = train_config.get("early_stopping_metric",
                                                       "eval_metric")
 
@@ -126,7 +125,7 @@ class TrainManager:
         else:
             raise ConfigurationError(
                 "Invalid setting for 'early_stopping_metric', "
-                "valid options: 'loss', 'ppl', 'eval_metric'.")
+                "valid options: 'loss', 'ppl', 'eval_metric'.", logger)
 
         # eval options
         test_config = config["testing"]
@@ -334,8 +333,8 @@ class TrainManager:
         else:
             logger.info("Reset tracking of the best checkpoint.")
 
-        if (not reset_iter_state
-                and model_checkpoint.get('train_iter_state', None) is not None):
+        if not reset_iter_state:
+            assert 'train_iter_state' in model_checkpoint
             self.train_iter_state = model_checkpoint["train_iter_state"]
         else:
             logger.info("Reset data iterator (random seed: {%d}).", self.seed)
@@ -451,9 +450,8 @@ class TrainManager:
                     self.optimizer.step()
 
                     # decay lr
-                    if self.scheduler is not None \
-                            and self.scheduler_step_at == "step":
-                        self.scheduler.step(step=self.stats.steps)
+                    if self.scheduler_step_at == "step":
+                        self.scheduler.step(self.stats.steps)
 
                     # reset gradients
                     self.model.zero_grad()
@@ -645,7 +643,7 @@ class TrainManager:
             store_attention_plots(
                 attentions=valid_attention_scores,
                 targets=valid_hypotheses_raw,
-                sources=data.tokenizer['src'](valid_sources),
+                sources=valid_data.tokenizer['src'](valid_sources),
                 indices=self.log_valid_sents,
                 output_prefix=(self.model_dir / f"att.{self.stats.steps}"
                                ).as_posix(),
@@ -700,8 +698,10 @@ class TrainManager:
 
             logger.info("Example #%d", p)
             # tokenized text
-            logger.debug("\tRaw source:     %s", data.get_item(idx=p, side='src'))
-            logger.debug("\tRaw reference:  %s", data.get_item(idx=p, side='trg'))
+            logger.debug("\tRaw source:     %s",
+                         data.get_item(idx=p, side='src'))
+            logger.debug("\tRaw reference:  %s",
+                         data.get_item(idx=p, side='trg'))
             logger.debug("\tRaw hypothesis: %s", hypotheses_raw[p])
 
             # post-processed text
@@ -773,7 +773,7 @@ def train(cfg_file: str, skip_test: bool = False) -> None:
 
     # load the data
     src_vocab, trg_vocab, train_data, dev_data, test_data = load_data(
-        data_cfg=cfg["data"], num_workers=cfg["training"].get("num_workers", 0))
+        data_cfg=cfg["data"])
 
     # build an encoder-decoder model
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)

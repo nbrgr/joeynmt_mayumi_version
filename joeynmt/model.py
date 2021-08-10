@@ -16,6 +16,7 @@ from joeynmt.decoders import Decoder, RecurrentDecoder, TransformerDecoder
 from joeynmt.embeddings import Embeddings
 from joeynmt.encoders import Encoder, RecurrentEncoder, TransformerEncoder
 from joeynmt.helpers import ConfigurationError
+from joeynmt.loss import XentLoss
 from joeynmt.initialization import initialize_model
 from joeynmt.vocabulary import Vocabulary
 
@@ -55,15 +56,21 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.pad_index
         self.bos_index = self.trg_vocab.bos_index
         self.eos_index = self.trg_vocab.eos_index
-        # self.loss_function = None # set by the TrainManager
+        self._loss_function: Callable = None # set by the TrainManager
 
     @property
     def loss_function(self):
         return self._loss_function
 
     @loss_function.setter
-    def loss_function(self, loss_function: Callable):
-        self._loss_function = loss_function
+    def loss_function(self, arg: Tuple[str, float]) -> None:
+        loss_type, smoothing = arg
+        if loss_type == "crossentropy":
+            self._loss_function = XentLoss(pad_index=self.pad_index,
+                                           smoothing=smoothing)
+        else:
+            ConfigurationError("We currently only support crossentropy loss.",
+                               logger)
 
     def forward(self, return_type: str = None, **kwargs) \
             -> Tuple[Tensor, Tensor, Tensor, Tensor]:
@@ -90,6 +97,7 @@ class Model(nn.Module):
             log_probs = F.log_softmax(out, dim=-1)
 
             # compute batch loss
+            # pylint: disable=not-callable
             batch_loss = self.loss_function(log_probs, kwargs["trg"])
 
             # return batch loss

@@ -5,13 +5,14 @@ Vocabulary module
 from collections import Counter
 import logging
 from pathlib import Path
-from typing import Dict, List, Tuple, Union
+from typing import Dict, List, Tuple
 
 import numpy as np
 
 from joeynmt.constants import BOS_ID, BOS_TOKEN, EOS_ID, EOS_TOKEN, PAD_ID, \
     PAD_TOKEN, UNK_ID, UNK_TOKEN
-from joeynmt.helpers import flatten, write_list_to_file
+from joeynmt.helpers import ConfigurationError, flatten, read_list_from_file, \
+    write_list_to_file
 
 logger = logging.getLogger(__name__)
 
@@ -200,23 +201,21 @@ def build_vocab(max_size: int, min_freq: int, tokens: List[List[str]] = None,
         # load it from file
         if vocab_file.suffix == ".tsv":
             tokens = {}
-            with vocab_file.open("r", encoding='utf-8') as f:
-                for line in f.readlines():
-                    surface, freq = line.rstrip("\n").split("\t")
-                    tokens[surface] = int(freq)
+            for line in read_list_from_file(vocab_file):
+                surface, freq = line.split("\t")
+                tokens[surface] = int(freq)
 
             unique_tokens = sort_and_cut(Counter(tokens), max_size, min_freq)
         else:
-            unique_tokens = []
-            with vocab_file.open("r", encoding='utf-8') as f:
-                for line in f.readlines():
-                    unique_tokens.append(line.rstrip("\n"))
+            unique_tokens = read_list_from_file(vocab_file)
+
     elif tokens is not None:
         # create newly
         counter = Counter(flatten(tokens))
         unique_tokens = sort_and_cut(counter, max_size, min_freq)
     else:
-        raise Error("Please provide a vocab file path or sentence list.")
+        raise ConfigurationError("Please provide a vocab file path or "
+                                 "sentence list.", logger)
 
     vocab = Vocabulary(unique_tokens)
     assert len(vocab) <= max_size + len(vocab.specials), (len(vocab), max_size)

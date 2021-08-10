@@ -213,12 +213,12 @@ class BaseScheduler:
         self._state_dict["rate"] = self._rate
         return self._state_dict
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: dict):
         """Given a state_dict, this function loads scheduler's state"""
         self._step = state_dict["step"]
         self._rate = state_dict["rate"]
 
-    def step(self, step):
+    def step(self, step: int):
         """Update parameters and rate"""
         self._step = step + 1   # sync with trainer.stats.steps
         rate = self._compute_rate()
@@ -267,7 +267,7 @@ class NoamScheduler(BaseScheduler):
         self._state_dict["hidden_size"] = self.hidden_size
         return self._state_dict
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: dict):
         """Given a state_dict, this function loads scheduler's state"""
         super().load_state_dict(state_dict)
         self.warmup = state_dict["warmup"]
@@ -331,7 +331,7 @@ class WarmupExponentialDecayScheduler(BaseScheduler):
         self._state_dict["min_rate"] = self.min_rate
         return self._state_dict
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: dict):
         """Given a state_dict, this function loads scheduler's state"""
         super().load_state_dict(state_dict)
         self.warmup = state_dict['warmup']
@@ -396,7 +396,7 @@ class WarmupInverseSquareRootScheduler(BaseScheduler):
         self._state_dict["min_rate"] = self.min_rate
         return self._state_dict
 
-    def load_state_dict(self, state_dict):
+    def load_state_dict(self, state_dict: dict):
         """Given a state_dict, this function loads scheduler's state"""
         super().load_state_dict(state_dict)
         self.warmup = state_dict['warmup']
