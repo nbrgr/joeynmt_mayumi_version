@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""
+Adapted from https://github.com/pytorch/fairseq/blob/master/examples/speech_to_text/prep_mustc_data.py
+
+    expected dir structure:
+        CoVoST2_ROOT
+        ├── en.tar.gz
+        ├── en          # src_lang
+        │   ├── clips
+        │   │   ├── common_voice_en_100000.mp3
+        │   │   ├── [...]
+        │   │   └── common_voice_en_9999944.mp3
+        │   ├── covost_v2.en_de.dev.tsv
+        │   ├── covost_v2.en_de.test.tsv
+        │   ├── covost_v2.en_de.train.tsv
+        │   ├── covost_v2.en_de.tsv
+        │   ├── covost_v2.en_de.tsv.tar.gz
+        │   ├── dev.tsv
+        │   ├── test.tsv
+        │   ├── train.tsv
+        │   └── validated.tsv
+        ├── tatoeba     # out-of-domain test data
+        │   ├── clips
+        │   │   ├── 1000503.mp3
+        │   │   ├── [...]
+        │   │   └── 998651.mp3
+        │   ├── tatoeba.zip
+        │   └── data
+        │       └── tt
+        │           └── tatoeba20191004.s2t.de_en.tsv
+        └── [... other scripts]
+"""
+
+import argparse
+from pathlib import Path
+from typing import Tuple, Callable
+from functools import partial
+from tqdm import tqdm
+import urllib.request
+from multiprocessing import  Pool, cpu_count
+
+import pandas as pd
+import numpy as np
+
+from torch import Tensor
+from torch.utils.data import Dataset
+import torchaudio
+from torchaudio.datasets.utils import download_url, extract_archive
+
+from audiodata_utils import create_zip, extract_fbank_features, load_tsv, \
+    get_zip_manifest, build_sp_model, Normalizer, save_tsv, get_n_frames
+
+from joeynmt.helpers import write_list_to_file
+from joeynmt.helpers_for_audio import remove_punc
+
+
+COLUMNS = ["id", "src", "n_frames", "trg", "speaker"]
+
+N_MEL_FILTERS = 80
+N_WORKERS = 16 #cpu_count()
+SP_MODEL_TYPE = "unigram" # one of ["bpe", "unigram", "char"]
+VOCAB_SIZE = 8000 #joint vocab
+LOWERCASE = {'en': True, 'de': False}
+REMOVE_PUNC = {'en': True, 'de': False}
+
+
+def _check_audio_meta(df: pd.DataFrame, root: Path):
+    def _validate(path):
+        flag = False
+        try:
+            _ = torchaudio.info(path.as_posix())
+            flag = True
+        except Exception:
+            pass
+        return flag
+    df['is_valid'] = df['path'].apply(lambda x: _validate(root / x))
+    return df
+
+
+def _parallel_df_apply(df: pd.DataFrame, func: Callable,
+                       n_cores: int = N_WORKERS) -> pd.DataFrame:
+    df_split = np.array_split(df, n_cores)
+    pool = Pool(n_cores)
+    df = pd.concat(pool.map(func, df_split))
+    pool.close()
+    pool.join()
+    return df
+
+
+class CoVoST2(Dataset):
+    """
+    Create a Dataset for CoVoST2 (https://github.com/facebookresearch/covost).
+
+    :param: root
+    :param: src_lang
+    :param: trg_lang
+    :param: split
+    """
+
+    SPLITS = ["dev", "test", "train"]
+    URL_TEMPLATE = ("https://dl.fbaipublicfiles.com/covost/"
+                    "covost_v2.{src_lang}_{trg_lang}.tsv.tar.gz")
+    XX_EN_LANGUAGES = ["fr", "de", "es", "ca", "it", "ru", "zh-CN", "pt", "fa",
+                       "et", "mn", "nl", "tr", "ar", "sv-SE", "lv", "sl", "ta",
+                       "ja", "id", "cy"]
+    EN_XX_LANGUAGES = ["de", "tr", "fa", "sv-SE", "mn", "zh-CN", "cy", "ca",
+                       "sl", "et", "id", "ar", "ta", "lv", "ja"]
+    FEATURE_ROOT = f"fbank{N_MEL_FILTERS}"
+
+    def __init__(self, root: Path, src_lang: str, trg_lang: str, split: str,
+                 return_wav: bool = True):
+        assert split in self.SPLITS
+        assert src_lang is not None
+        self.has_translation = trg_lang is not None # False -> asr; True -> ast
+        if self.has_translation:
+            assert "en" in {src_lang, trg_lang}
+            if src_lang == "en":
+                assert trg_lang in self.EN_XX_LANGUAGES
+            else:
+                assert src_lang in self.XX_EN_LANGUAGES
+        else:
+            # Hack here so that we can get "split" column from CoVoST TSV.
+            # Note that we use CoVoST train split for ASR which is an extension
+            # to Common Voice train split.
+            trg_lang = "de" if src_lang == "en" else "en"
+
+        self.root = Path(root) / src_lang
+        if not self.root.is_dir():
+            raise NotADirectoryError(f"{self.root} does not exist.")
+
+        data_url = self.URL_TEMPLATE.format(
+            src_lang=src_lang, trg_lang=trg_lang
+        )
+        data_archive = self.root / Path(data_url).name
+        if not data_archive.is_file():
+            download_url(data_url, self.root.as_posix(), hash_value=None)
+        data_extracted = extract_archive(data_archive.as_posix())
+
+        cv_tsv_path = self.root / "validated.tsv"
+        assert cv_tsv_path.is_file()
+        cv_tsv = load_tsv(cv_tsv_path)
+        covost_tsv = load_tsv(Path(data_extracted[0]))
+
+        df = pd.merge(left=cv_tsv[["path", "sentence", "client_id"]],
+                      right=covost_tsv[["path", "translation", "split"]],
+                      how="inner", on="path")
+        if split == "train":
+            self.df = df[(df["split"] == split) | (df["split"] == f"{split}_covost")]
+        else:
+            self.df = df[df["split"] == split]
+
+        # check validity
+        self.df = self._drop_invalid(df=self.df, mp3_path=(self.root / "clips"))
+
+        # whether to call torchaudio.load()
+        self.return_wav = return_wav
+
+
+    def _drop_invalid(self, df: pd.DataFrame, mp3_path: Path) -> pd.DataFrame:
+        """check AudioMetaData"""
+        func = partial(_check_audio_meta, root=mp3_path)
+        df = _parallel_df_apply(df, func, n_cores=N_WORKERS)
+        for idx, row in df[df['is_valid'] == False].iterrows():
+            print(f'Skip {idx}-th instance in {mp3_path / row["path"]}.')
+        return df[df['is_valid'] == True].reset_index(drop=True)
+
+
+    def __getitem__(self, n: int) -> Tuple[Tensor, int, str, str, str, str]:
+        """Load the n-th sample from the dataset.
+
+        :param n: The index of the sample to be loaded
+        :returns: tuple of ``(waveform, num_frames, sample_rate, transcription,
+                              translation, speaker_id, utterance_id)``
+        """
+        data = self.df.iloc[n]
+        assert data['is_valid'] == True, data
+
+        mp3_path = self.root / "clips" / data["path"]
+        transcription = data["sentence"]
+        translation = data["translation"] if self.has_translation else None
+        speaker_id = data["client_id"]
+        utterance_id = data["path"].replace(".mp3", "")
+        num_frames = data['num_frames'] if 'num_frames' in data else None
+        if self.return_wav:
+            waveform, sample_rate = torchaudio.load(mp3_path)
+            if num_frames is None:
+                num_frames = get_n_frames(waveform, sample_rate)
+                self.data[n]['num_frames'] = num_frames
+        else:
+            waveform, sample_rate = None, None
+            #assert num_frames is not None
+        return (waveform, sample_rate, num_frames, transcription, translation,
+                speaker_id, utterance_id)
+
+    def __len__(self) -> int:
+        return len(self.df)
+
+
+class Tatoeba(CoVoST2):
+    URL_TEMPLATE = "https://dl.fbaipublicfiles.com/covost/tatoeba.zip"
+    LANG_CODE_2_TO_3 = {
+        'fr': 'fra', 'de': 'deu', 'nl': 'nld', 'ru': 'rus', 'en': 'eng', 'es': 'spa'
+    }
+    def __init__(self, root: Path, src_lang: str, trg_lang: str):
+        assert src_lang is not None
+        self.has_translation = trg_lang is not None # False -> asr; True -> ast
+
+        assert trg_lang == "en" and src_lang in self.LANG_CODE_2_TO_3
+        self.root = Path(root) / "tatoeba"
+        if not self.root.is_dir():
+            raise NotADirectoryError(f"{self.root} does not exist.")
+
+        data_url = self.URL_TEMPLATE
+        data_archive = self.root / Path(data_url).name
+        if not data_archive.is_file():
+            download_url(data_url, self.root.as_posix(), hash_value=None)
+        data_extracted = extract_archive(data_archive.as_posix())
+
+        for tsv_path in data_extracted:
+            if tsv_path.endswith(f"{src_lang}_{trg_lang}.tsv"):
+                cv_tsv_path = self.root / tsv_path
+                break
+        assert cv_tsv_path.is_file()
+        df = load_tsv(cv_tsv_path).rename(
+            columns={"en_sentence": "translation", "speaker": "client_id"})
+        df["split"] = "tatoeba"
+        df["path"] = df["id"].apply(lambda x: f"{x}.mp3")
+        #save_tsv(df, self.root / cv_tsv_path.name)
+        (self.root / "clips").mkdir(exist_ok=True)
+
+        # check validity
+        self._drop_invalid()
+
+        # whether to call torchaudio.load()
+        self.return_wav = True
+
+    def _download_mp3(self, lang: str, s_id: str):
+        lang_3 = self.LANG_CODE_2_TO_3[lang]
+        url = f'https://audio.tatoeba.org/sentences/{lang_3}/{s_id}.mp3'
+        try:
+            urllib.request.urlretrieve(url, (self.root / f'clips/{s_id}.mp3'))
+        except Exception as e:
+            raise Exception(e)
+
+
+def process(data_root, src_lang, trg_lang):
+    root = Path(data_root).absolute()
+
+    # filterbank dir (shared across splits)
+    feature_root = root / src_lang / CoVoST2.FEATURE_ROOT
+    feature_root.mkdir(exist_ok=True)
+
+    # Extract features
+    print(f"Create {src_lang}-{trg_lang} dataset.")
+    datasets = {}
+    for split in CoVoST2.SPLITS:
+        print(f"Fetching split {split}...")
+        datasets[split] = CoVoST2(root, src_lang, trg_lang, split)
+
+        print(f"Extracting log mel filter bank features ...")
+        assert datasets[split].return_wav is True
+        for i, (wav, sample_rate, n_frames, _, _, spk_id, utt_id) in enumerate(tqdm(datasets[split])):
+            try:
+                extract_fbank_features(wav, n_frames, utt_id,
+                                       sample_rate=sample_rate,
+                                       feature_root=feature_root,
+                                       n_mel_bins=N_MEL_FILTERS,
+                                       overwrite=False)
+            except Exception as e:
+                print(f'Skip {i}-th instance in {root / src_lang / utt_id}.mp3.', e)
+                continue
+
+    # Pack features into ZIP
+    print("ZIPing features...")
+    create_zip(feature_root, feature_root.with_suffix(".zip"))
+    print("Fetching ZIP manifest...")
+    zip_manifest = get_zip_manifest(feature_root.with_suffix(".zip"))
+    # Generate TSV manifest
+    print("Generating manifest...")
+    all_data = []
+    with tqdm(total=len(zip_manifest)) as pbar:
+        for split, dataset in datasets.items():
+            dataset.return_wav = False  # a bit faster...
+            for i, (_, _, n_frames, src_utt, trg_utt, spk_id, utt_id) in enumerate(dataset):
+                # cleanup text
+                if LOWERCASE[src_lang]:
+                    src_utt = src_utt.lower()
+                if LOWERCASE[trg_lang]:
+                    trg_utt = trg_utt.lower()
+                if REMOVE_PUNC[src_lang]:
+                    src_utt = remove_punc(src_utt)
+                if REMOVE_PUNC[trg_lang]:
+                    trg_utt = remove_punc(trg_utt)
+                # construct entry
+                try:
+                    record = {
+                        "id": utt_id,
+                        "src": zip_manifest[utt_id],
+                        "n_frames": n_frames,
+                        f"{src_lang}_utt": src_utt,
+                        f"{trg_lang}_utt": trg_utt,
+                        "speaker": spk_id,
+                        "split": split
+                    }
+                    all_data.append(record)
+                except Exception as e:
+                    print(f'Skip {i}-th instance in {root / src_lang / utt_id}.mp3.', e)
+                pbar.update(1)
+        all_df = pd.DataFrame.from_records(all_data)
+        save_tsv(all_df, (root / src_lang / 'joey_all_data_tmp.tsv'))
+        del all_data
+
+    # Generate joint vocab
+    print("Building joint vocab...")
+    raw_textfile = root / src_lang / f"train.{src_lang}{trg_lang}"
+    train_df = all_df[all_df.split == "train"]
+    train = pd.concat([train_df.src_utt, train_df.trg_utt])
+    write_list_to_file(raw_textfile, train.to_list())
+
+    spm_filename = root / src_lang / f"spm_{SP_MODEL_TYPE}{VOCAB_SIZE}"
+    kwargs = {'model_type': SP_MODEL_TYPE,
+              'vocab_size': VOCAB_SIZE,
+              'character_coverage': 1.0,
+              'num_workers': N_WORKERS}
+    spm = build_sp_model(raw_textfile, spm_filename, **kwargs)
+
+    print("Saving data in tsv ...")
+    for split in CoVoST2.SPLITS:
+        split_df = all_df[all_df.split == split]
+        for _task, _lang in [("asr", src_lang), ("st", trg_lang)]:
+            # apply joint vocab
+            #split_df[f'{_lang}_utt'] = split_df[f'{_lang}_utt'].apply(
+            #    lambda x: ' '.join(spm.encode(x, out_type=str)))
+            save_tsv(split_df.rename(columns={f'{_lang}_utt': 'trg'})[COLUMNS],
+                     root / src_lang / f"joey_{_task}_{split}.tsv")
+            write_list_to_file(root / src_lang / f"{split}.{_lang}",
+                               split_df[f'{_lang}_utt'].to_list())
+        print(f'\t{split} tsv saved.')
+    print("Done!")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data_root", "-d", required=True, type=str)
+    parser.add_argument("--src_lang", default="en", type=str)
+    parser.add_argument("--trg_lang", default="de", type=str)
+    args = parser.parse_args()
+
+    process(args.data_root, args.src_lang, args.trg_lang)
+
+
+if __name__ == "__main__":
+    main()

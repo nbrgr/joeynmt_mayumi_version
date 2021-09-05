@@ -2,23 +2,25 @@
 """
 This modules holds methods for generating predictions from a model.
 """
+from collections import defaultdict
 import logging
 from pathlib import Path
 import sys
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 import torch
 from torch.utils.data import Dataset
 
-from joeynmt.data import TranslationDataset, load_data, make_data_iter
+from joeynmt.data import TranslationDataset, TsvDataset, load_data, make_data_iter
 from joeynmt.helpers import bpe_postprocess, expand_reverse_index, \
-    load_checkpoint, load_config, make_logger, resolve_ckpt_path, \
-    store_attention_plots, write_list_to_file
-from joeynmt.metrics import bleu, chrf, sequence_accuracy, token_accuracy
+    load_checkpoint, load_config, make_logger, read_list_from_file, \
+    resolve_ckpt_path, store_attention_plots, write_list_to_file
+from joeynmt.metrics import bleu, chrf, sequence_accuracy, token_accuracy, wer
 from joeynmt.model import Model, _DataParallel, build_model
 from joeynmt.search import run_batch
+from joeynmt.tokenizers import EvaluationTokenizer
 from joeynmt.vocabulary import Vocabulary
 
 logger = logging.getLogger(__name__)
@@ -30,16 +32,15 @@ def validate_on_data(model: Model,
                      device: torch.device,
                      n_gpu: int,
                      max_output_length: int,
-                     eval_metric: Optional[str],
+                     eval_metrics: List[str],
                      compute_loss: bool = False,
                      beam_size: int = 1,
                      beam_alpha: int = -1,
                      batch_type: str = "sentence",
-                     postprocess: bool = True,
-                     bpe_type: str = "subword-nmt",
                      sacrebleu: dict = None,
-                     n_best: int = 1) \
-        -> Tuple[float, float, float, List[str], List[str], List[str],
+                     n_best: int = 1,
+                     normalization: str = "batch") \
+        -> Tuple[Dict[str, float], List[str], List[str], List[str],
                  List[List[str]], List[np.ndarray]]:
     """
     Generate translations for the given data.
@@ -49,10 +50,10 @@ def validate_on_data(model: Model,
     :param model: model module
     :param data: dataset for validation
     :param batch_size: validation batch size
-    :param device: cpu or gpu
+    :param device:
     :param n_gpu: number of GPUs
     :param max_output_length: maximum length for generated hypotheses
-    :param eval_metric: evaluation metric, e.g. "bleu"
+    :param eval_metrics: evaluation metrics, e.g. "bleu"
     :param compute_loss: whether to computes a scalar loss
         for given inputs and targets
     :param beam_size: beam size for validation.
@@ -60,15 +61,12 @@ def validate_on_data(model: Model,
     :param beam_alpha: beam search alpha for length penalty,
         disabled if set to -1 (default).
     :param batch_type: validation batch type (sentence or token)
-    :param postprocess: if True, remove BPE segmentation from translations
-    :param bpe_type: bpe type, one of {"subword-nmt", "sentencepiece"}
     :param sacrebleu: sacrebleu options
     :param n_best: Amount of candidates to return
+    :param normalization:
 
     :return:
-        - current_valid_score: current validation score [eval_metric],
-        - valid_loss: validation loss,
-        - valid_ppl:, validation perplexity,
+        - current_valid_scores: (dict) current validation score [eval_metric],
         - valid_sources: validation sources,
         - valid_references: validation references,
         - valid_hypotheses: validation_hypotheses,
@@ -89,16 +87,20 @@ def validate_on_data(model: Model,
     # to batch_size*beam_size, and it could cause an out-of-memory error.
     valid_iter = make_data_iter(
         dataset=data, batch_size=batch_size, batch_type=batch_type,
-        shuffle=False, pad_index=model.pad_index, device=device)
+        shuffle=False, pad_index=model.pad_index, device=device,
+        normalization=normalization)
 
     # disable dropout
     model.eval()
 
+    # place holders for scores
+    valid_scores = defaultdict(float)
     all_outputs = []
     valid_attention_scores = []
     total_loss = 0
     total_ntokens = 0
     total_nseqs = 0
+    total_n_correct = 0
     for batch in valid_iter:
         if batch.nseqs < 1:
             continue
@@ -111,68 +113,84 @@ def validate_on_data(model: Model,
         if compute_loss and batch.has_trg:
             # don't track gradients during validation
             with torch.no_grad():
-                batch_loss, _, _, _ = model(return_type="loss", **vars(batch))
+                batch_loss, _, _, n_correct = model(return_type="loss",
+                                                    **vars(batch))
             if n_gpu > 1:
-                batch_loss = batch_loss.mean() # average on multi-gpu
-            total_loss += batch_loss
+                batch_loss = batch_loss.sum() # sum on multi-gpu
+                n_correct = n_correct.float().sum()
+            total_loss += batch_loss.item()
             total_ntokens += batch.ntokens
             total_nseqs += batch.nseqs
+            total_n_correct += n_correct.item()
+            logger.debug(f'{batch}, batch_loss: {batch_loss}, n_correct: {n_correct}')
 
         # run as during inference to produce translations
         output, attention_scores = run_batch(
             model=model, batch=batch, beam_size=beam_size,
             beam_alpha=beam_alpha, max_output_length=max_output_length,
             n_best=n_best)
-
+        logger.debug(f'output: {output}')
         # sort outputs back to original order
         all_outputs.extend(output[sort_reverse_index])
         valid_attention_scores.extend(attention_scores[sort_reverse_index]
                                       if attention_scores is not None else [])
     assert len(all_outputs) == len(data) * n_best
-
+    logger.debug(all_outputs[:10])
     if compute_loss and total_ntokens > 0:
         # total validation loss
-        valid_loss = total_loss
+        valid_scores['loss'] = total_loss / total_nseqs # normalize by nseqs
+        # accuracy before decoding
+        valid_scores['acc'] = total_n_correct / total_ntokens
         # exponent of token-level negative log prob
-        valid_ppl = torch.exp(total_loss / total_ntokens)
+        valid_scores['ppl'] = np.exp(total_loss / total_ntokens)
     else:
-        valid_loss = -1
-        valid_ppl = -1
+        valid_scores['loss'] = -1
+        valid_scores['acc'] = -1
+        valid_scores['ppl'] = -1
 
     # decode back to symbols
     decoded_valid = model.trg_vocab.arrays_to_sentences(arrays=all_outputs,
                                                         cut_at_eos=True)
-
+    logger.debug(decoded_valid[:10])
     # evaluate with metric on full dataset
     valid_sources, valid_references = data.get_raw_texts()
     valid_hypotheses = [data.tokenizer['trg'].post_process(t)
                         for t in decoded_valid]
-
+    logger.debug(valid_hypotheses[:10])
     # if references are given, evaluate against them
-    current_valid_score = -1
     if valid_references:
         assert len(valid_hypotheses) == len(valid_references)
 
-        current_valid_score = 0
-        if eval_metric.lower() == 'bleu':
-            # this version does not use any tokenization
-            current_valid_score = bleu(
-                valid_hypotheses, valid_references,
-                tokenize=sacrebleu["tokenize"])
-        elif eval_metric.lower() == 'chrf':
-            current_valid_score = chrf(valid_hypotheses, valid_references,
-                remove_whitespace=sacrebleu["remove_whitespace"])
-        elif eval_metric.lower() == 'token_accuracy':
-            current_valid_score = token_accuracy(   # supply List[List[str]]
-                list(decoded_valid), data.tokenizer['trg'](
-                    valid_references, sample=False, filter_by_length=False))
-        elif eval_metric.lower() == 'sequence_accuracy':
-            current_valid_score = sequence_accuracy(
-                valid_hypotheses, valid_references)
+        for eval_metric in eval_metrics:
+            if eval_metric.lower() == 'bleu':
+                # this version does not use any tokenization
+                valid_scores[eval_metric] = bleu(
+                    valid_hypotheses,
+                    valid_references,
+                    tokenize=sacrebleu["tokenize"])
+            elif eval_metric.lower() == 'chrf':
+                valid_scores[eval_metric] = chrf(
+                    valid_hypotheses,
+                    valid_references,
+                    remove_whitespace=sacrebleu["remove_whitespace"])
+            elif eval_metric.lower() == 'token_accuracy':
+                valid_scores[eval_metric] = token_accuracy(
+                    list(decoded_valid),
+                    data.tokenizer['trg'](valid_references,
+                                          sample=False,
+                                          filter_by_length=False))
+            elif eval_metric.lower() == 'sequence_accuracy':
+                valid_scores[eval_metric] = sequence_accuracy(
+                    valid_hypotheses,
+                    valid_references)
+            elif eval_metric.lower() == 'wer':
+                valid_scores[eval_metric] = wer(
+                    valid_hypotheses,
+                    valid_references,
+                    tokenizer=sacrebleu["tok_fun"])
 
-    return current_valid_score, valid_loss, valid_ppl, valid_sources, \
-        valid_references, valid_hypotheses, decoded_valid, \
-        valid_attention_scores
+    return valid_scores, valid_sources, valid_references, \
+           valid_hypotheses, decoded_valid, valid_attention_scores
 
 
 def parse_test_args(cfg, mode="test"):
@@ -182,15 +200,14 @@ def parse_test_args(cfg, mode="test"):
     :param mode: 'test' or 'translate'
     :return:
     """
+    train_cfg = cfg["training"]
     if "test" not in cfg["data"].keys():
         raise ValueError("Test data must be specified in config.")
+    task = cfg["data"].get("task", "MT")
 
-    batch_size = cfg["training"].get(
-        "eval_batch_size", cfg["training"].get("batch_size", 1))
-    batch_type = cfg["training"].get(
-        "eval_batch_type", cfg["training"].get("batch_type", "sentence"))
-    use_cuda = (cfg["training"].get("use_cuda", False)
-                and torch.cuda.is_available())
+    batch_size = train_cfg.get("eval_batch_size", train_cfg.get("batch_size", 1))
+    batch_type = train_cfg.get("eval_batch_type", train_cfg.get("batch_type", "sentence"))
+    use_cuda = (train_cfg.get("use_cuda", False) and torch.cuda.is_available())
     device = torch.device("cuda" if use_cuda else "cpu")
     if mode == 'test':
         n_gpu = torch.cuda.device_count() if use_cuda else 0
@@ -199,49 +216,58 @@ def parse_test_args(cfg, mode="test"):
         batch_per_device = batch_size // n_gpu if n_gpu > 1 else batch_size
         logger.info("Process device: %s, n_gpu: %d, batch_size per device: %d",
                     device, n_gpu, batch_per_device)
-        eval_metric = cfg["training"]["eval_metric"]
+        eval_metrics = [s.strip().lower() for s
+                        in train_cfg["eval_metrics"].split(",")
+                        if len(s.strip()) > 0]
 
     elif mode == 'translate':
         # in multi-gpu, batch_size must be bigger than n_gpu!
         n_gpu = 1 if use_cuda else 0
         logger.debug("Process device: %s, n_gpu: %d", device, n_gpu)
-        eval_metric = ""
+        eval_metrics = []
 
-    max_output_length = cfg["training"].get("max_output_length", None)
+    max_output_length = train_cfg.get("max_output_length", None)
+    normalization = train_cfg.get("normalization", "batch")
 
     # whether to use beam search for decoding, 0: greedy decoding
     if "testing" in cfg.keys():
         beam_size = cfg["testing"].get("beam_size", 1) # positive integer only
         beam_alpha = cfg["testing"].get("alpha", -1)
-        postprocess = cfg["testing"].get("postprocess", True)
-        bpe_type = cfg["testing"].get("bpe_type", "subword-nmt")
         sacrebleu = {"remove_whitespace": True, "tokenize": "13a"}
         if "sacrebleu" in cfg["testing"].keys():
             sacrebleu["remove_whitespace"] = cfg["testing"]["sacrebleu"] \
                 .get("remove_whitespace", True)
             sacrebleu["tokenize"] = cfg["testing"]["sacrebleu"] \
                 .get("tokenize", "13a")
+        if "wer" in eval_metrics:
+            eval_tokenizer = EvaluationTokenizer(
+                tokenize=sacrebleu["tokenize"],
+                lowercase=cfg["data"].get("lowercase", False),
+                remove_punctuation=cfg["testing"]["sacrebleu"] \
+                    .get("remove_punctuation", False),
+                level="char" if cfg["data"]["level"] == "char" else "word")
+            logger.info(eval_tokenizer)
+            sacrebleu["tok_fun"] = eval_tokenizer
 
     else:
         beam_size = 1
         beam_alpha = -1
-        postprocess = True
-        bpe_type = "subword-nmt"
         sacrebleu = {"remove_whitespace": True, "tokenize": "13a"}
 
     decoding_description = "Greedy decoding" if beam_size < 2 else \
         f"Beam search decoding with beam size = {beam_size} " \
         f"and alpha = {beam_alpha}"
-    tokenizer_info = f" [{sacrebleu['tokenize']}]" if eval_metric == "bleu" else ""
+    tokenizer_info = sacrebleu['tokenize'] \
+        if "bleu" in eval_metrics or "wer" in eval_metrics else ""
 
     # caution: batch_size divided by beam_size, because a batch will be expanded
     # to batch.nseqs * beam_size, and it could cause an out-of-memory error.
     if batch_size > beam_size:
         batch_size //= beam_size
 
-    return batch_size, batch_type, device, n_gpu, eval_metric, \
+    return batch_size, batch_type, device, n_gpu, eval_metrics, \
            max_output_length, beam_size, beam_alpha, sacrebleu, \
-           decoding_description, tokenizer_info
+           decoding_description, tokenizer_info, task, normalization
 
 
 def test(cfg_file,
@@ -262,6 +288,7 @@ def test(cfg_file,
     # pylint: disable-msg=logging-too-many-args,too-many-branches
     cfg = load_config(Path(cfg_file))
     model_dir = Path(cfg["training"]["model_dir"])
+    task = cfg["data"].get("task", "MT")
 
     if len(logger.handlers) == 0:
         _ = make_logger(model_dir, mode="test")   # version string returned
@@ -269,27 +296,28 @@ def test(cfg_file,
     # load the data
     if datasets is None:
         # set default vocab path
-        src_vocab_file = model_dir / "src_vocab.txt"
         trg_vocab_file = model_dir / "trg_vocab.txt"
-        if "src_vocab" not in cfg["data"]:
-            assert src_vocab_file.isfile(), f"{src_vocab_file} not found."
-            cfg["data"]["src_vocab"] = src_vocab_file
         if "trg_vocab" not in cfg["data"]:
             assert trg_vocab_file.isfile(), f"{trg_vocab_file} not found."
             cfg["data"]["trg_vocab"] = trg_vocab_file
+        if task == "MT":
+            src_vocab_file = model_dir / "src_vocab.txt"
+            if "src_vocab" not in cfg["data"]:
+                assert src_vocab_file.isfile(), f"{src_vocab_file} not found."
+                cfg["data"]["src_vocab"] = src_vocab_file
         # load data
-        src_vocab, trg_vocab , _, dev_data, test_data = load_data(
+        src_vocab, trg_vocab, _, dev_data, test_data = load_data(
             data_cfg=cfg["data"], datasets=["dev", "test"])
         data_to_predict = {"dev": dev_data, "test": test_data}
     else:  # avoid to load data again
         data_to_predict = {"dev": datasets["dev"], "test": datasets["test"]}
-        src_vocab = datasets["src_vocab"]
+        src_vocab = datasets["src_vocab"]   # None for task == "s2t"
         trg_vocab = datasets["trg_vocab"]
 
     # parse test args
-    batch_size, batch_type, device, n_gpu, eval_metric, max_output_length, \
-        beam_size, beam_alpha, sacrebleu, decoding_description, tokenizer_info \
-        = parse_test_args(cfg, mode="test")
+    batch_size, batch_type, device, n_gpu, eval_metrics, max_output_length, \
+        beam_size, beam_alpha, sacrebleu, decoding_description, \
+        tokenizer_info, task, normalization = parse_test_args(cfg, mode="test")
 
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
@@ -298,8 +326,16 @@ def test(cfg_file,
     ckpt = resolve_ckpt_path(ckpt, cfg["training"].get("load_model", None),
                              model_dir)
 
-    # load model state from disk
     model_checkpoint = load_checkpoint(ckpt, device=device)
+    # objective function: just for ctc decoding.
+    # in search.py, joeynmt accesses model class variables:
+    #       with_ctc = model.loss_function.require_ctc_layer
+    #       ctc_weight = model.loss_function.ctc_weight
+    model.loss_function = (cfg["training"].get("loss", "crossentropy"),
+                           cfg["training"].get("label_smoothing", 0.0),
+                           cfg["training"].get("ctc_weight", 0.3))
+
+    # load model state from disk
     model.load_state_dict(model_checkpoint["model_state"])
     logger.info("Loading model_state from %s.", ckpt)
 
@@ -314,24 +350,35 @@ def test(cfg_file,
         if data_set is None:
             continue
 
-        dataset_file = f'{cfg["data"][data_set_name]}.{cfg["data"]["src"]}'
+        if task == "MT":
+            dataset_file = f'{cfg["data"][data_set_name]}.{cfg["data"]["src"]}'
+        elif task == "s2t":
+            dataset_file = f'{Path(cfg["data"]["root_path"])/cfg["data"][data_set_name]}.tsv'
         logger.info("Decoding on %s set (%s)...", data_set_name, dataset_file)
-        data_set.open_file()
+        if isinstance(data_set, TranslationDataset):
+            data_set.open_file()
 
         # pylint: disable=unused-variable
-        (score, loss, ppl, sources, references, hypotheses, hypotheses_raw,
+        (scores, sources, references, hypotheses, hypotheses_raw,
          attention_scores) = validate_on_data(
-            model, data=data_set, batch_size=batch_size, batch_type=batch_type,
-            max_output_length=max_output_length, eval_metric=eval_metric,
-            device=device, compute_loss=False, beam_size=beam_size,
-            beam_alpha=beam_alpha, sacrebleu=sacrebleu, n_gpu=n_gpu, n_best=1)
+            model=model, data=data_set, batch_size=batch_size,
+            batch_type=batch_type, max_output_length=max_output_length,
+            eval_metrics=eval_metrics, compute_loss=False, beam_size=beam_size,
+            beam_alpha=beam_alpha, sacrebleu=sacrebleu, device=device,
+            n_gpu=n_gpu, n_best=1, normalization=normalization)
         # pylint: enable=unused-variable
 
-        data_set.close_file()
+        if isinstance(data_set, TranslationDataset):
+            data_set.close_file()
 
         if data_set.has_trg:
-            logger.info("%4s %s%s: %6.2f (%s)", data_set_name, eval_metric,
-                        tokenizer_info, score, decoding_description)
+            info_str = "{:4s}".format(data_set_name)
+            for i, eval_metric in enumerate(eval_metrics):
+                info_str += (" " if i==0 else ", ") + eval_metric
+                if eval_metric in ["bleu", "wer"]:
+                    info_str += "[{}]".format(tokenizer_info)
+                info_str += " : {:6.2f}".format(scores[eval_metric])
+            logger.info("%s (%s)", info_str, decoding_description)
         else:
             logger.info("No references given for %s -> no evaluation.",
                         data_set_name)
@@ -380,14 +427,16 @@ def translate(cfg_file: str,
     def _translate_data(test_data):
         """ Translates given dataset, using parameters from outer scope. """
         _, _, _, _, _, hypotheses, _, _ = validate_on_data(
-            model, data=test_data, batch_size=batch_size, batch_type=batch_type,
-            max_output_length=max_output_length, eval_metric="", device=device,
-            compute_loss=False, beam_size=beam_size, beam_alpha=beam_alpha,
-            sacrebleu=sacrebleu, n_gpu=n_gpu, n_best=n_best)
+            model=model, data=test_data, batch_size=batch_size,
+            batch_type=batch_type, max_output_length=max_output_length,
+            eval_metrics=[], compute_loss=False, beam_size=beam_size,
+            beam_alpha=beam_alpha, sacrebleu=sacrebleu, device=device,
+            n_gpu=n_gpu, n_best=n_best, normalization=normalization)
         return hypotheses
 
     cfg = load_config(Path(cfg_file))
     model_dir = Path(cfg["training"]["model_dir"])
+    task = cfg["data"].get("task", "MT")
 
     _ = make_logger(model_dir, mode="translate")
     # version string returned
@@ -397,15 +446,18 @@ def translate(cfg_file: str,
                              model_dir)
 
     # read vocabs
-    src_vocab_file = cfg["data"].get("src_vocab", model_dir / "src_vocab.txt")
-    trg_vocab_file = cfg["data"].get("trg_vocab", model_dir / "trg_vocab.txt")
-    src_vocab = Vocabulary(file=Path(src_vocab_file))
-    trg_vocab = Vocabulary(file=Path(trg_vocab_file))
+    trg_tokens = read_list_from_file(
+        Path(cfg["data"].get("trg_vocab", model_dir / "trg_vocab.txt")))
+    trg_vocab = Vocabulary(trg_tokens)
+    if task == "MT":
+        src_tokens = read_list_from_file(
+            Path(cfg["data"].get("src_vocab", model_dir / "src_vocab.txt")))
+        src_vocab = Vocabulary(src_tokens)
 
     # parse test args
-    batch_size, batch_type, device, n_gpu, eval_metric, max_output_length, \
-    beam_size, beam_alpha, sacrebleu, decoding_description, tokenizer_info \
-        = parse_test_args(cfg, mode="translate")
+    batch_size, batch_type, device, n_gpu, eval_metrics, max_output_length, \
+    beam_size, beam_alpha, sacrebleu, decoding_description, tokenizer_info, \
+    task, normalization = parse_test_args(cfg, mode="translate")
 
     # build model and load parameters into it
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)

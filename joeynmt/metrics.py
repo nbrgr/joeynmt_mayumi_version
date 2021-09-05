@@ -6,6 +6,7 @@ This module holds various MT evaluation metrics.
 from typing import List
 
 import sacrebleu
+import editdistance
 
 
 def chrf(hypotheses: List[str], references: List[str],
@@ -20,7 +21,7 @@ def chrf(hypotheses: List[str], references: List[str],
     """
     return sacrebleu.corpus_chrf(hypotheses=hypotheses, references=[references],
                                  remove_whitespace=remove_whitespace).score
-
+                                 
 
 def bleu(hypotheses: List[str], references: List[str], tokenize: str = "13a") \
         -> float:
@@ -32,8 +33,8 @@ def bleu(hypotheses: List[str], references: List[str], tokenize: str = "13a") \
     :param tokenize: one of {'none', '13a', 'intl', 'zh', 'ja-mecab'}
     :return:
     """
-    return sacrebleu.corpus_bleu(sys_stream=hypotheses,
-                                 ref_streams=[references],
+    return sacrebleu.corpus_bleu(hypotheses=hypotheses,
+                                 references=[references],
                                  tokenize=tokenize).score
 
 
@@ -72,3 +73,27 @@ def sequence_accuracy(hypotheses: List[str], references: List[str]) -> float:
     correct_sequences = sum([1 for (hyp, ref) in zip(hypotheses, references)
                              if hyp == ref])
     return (correct_sequences / len(hypotheses)) * 100 if hypotheses else 0.0
+
+
+def wer(hypotheses, references, tokenizer):
+    """
+    Compute word error rate in corpus-level
+
+    :param hypotheses: list of hypotheses (strings)
+    :param references: list of references (strings)
+    :param tokenizer: tokenize function (callable)
+    :return: normalized word error rate
+    """
+    numerator = 0.0
+    denominator = 0.0
+    # sentence-level wer
+    #for hyp, ref in zip(hypotheses, references):
+    #    wer = editdistance.eval(tokenizer(hyp),
+    #                            tokenizer(ref)) / len(tokenizer(ref))
+    #    numerator += max(wer, 1.0) # can be `wer > 1` if `len(hyp) > len(ref)`
+    #    denominator += 1.0
+    # corpus-level wer
+    for hyp, ref in zip(hypotheses, references):
+        numerator += editdistance.eval(tokenizer(hyp), tokenizer(ref))
+        denominator += len(tokenizer(ref))
+    return (numerator / denominator) * 100 if denominator else 0.0

@@ -134,6 +134,12 @@ class RecurrentDecoder(Decoder):
         if freeze:
             freeze_params(self)
 
+        self.ctc_output_layer = None
+        encoder_output_size = kwargs.get("encoder_output_size_for_ctc", None)
+        if encoder_output_size is not None:
+            self.ctc_output_layer = nn.Linear(encoder_output_size,
+                                              vocab_size, bias=False)
+
     def _check_shapes_input_forward_step(self,
                                          prev_embed: Tensor,
                                          prev_att_vector: Tensor,
@@ -328,6 +334,7 @@ class RecurrentDecoder(Decoder):
                 with shape (batch_size, unroll_steps, src_length),
             - att_vectors: attentional vectors
                 with shape (batch_size, unroll_steps, hidden_size)
+            - ctc_output:
         """
         # initialize decoder hidden state from final encoder hidden state
         if hidden is None and encoder_hidden is not None:
@@ -399,7 +406,9 @@ class RecurrentDecoder(Decoder):
             hidden = hidden.permute(1, 0, 2).contiguous()
             assert hidden.size(0) == batch_size
         # shape (batch_size, num_layers, hidden_size)
-        return outputs, hidden, att_probs, att_vectors
+
+        ctc_output = None
+        return outputs, hidden, att_probs, att_vectors, ctc_output
 
     def _init_hidden(self, encoder_final: Tensor = None) \
             -> Tuple[Tensor, Optional[Tensor]]:
@@ -502,6 +511,12 @@ class TransformerDecoder(Decoder):
         if freeze:
             freeze_params(self)
 
+        self.ctc_output_layer = None
+        encoder_output_size = kwargs.get("encoder_output_size_for_ctc", None)
+        if encoder_output_size is not None:
+            self.ctc_output_layer = nn.Linear(encoder_output_size,
+                                              vocab_size, bias=False)
+
     def forward(self,
                 trg_embed: Tensor = None,
                 encoder_output: Tensor = None,
@@ -524,6 +539,11 @@ class TransformerDecoder(Decoder):
                          Note that a subsequent mask is applied here.
         :param kwargs:
         :return:
+            - decoder_output: shape (batch_size, seq_len, vocab_size)
+            - decoder_hidden: shape (batch_size, seq_len, emb_size)
+            - None
+            - None
+            - ctc_output
         """
         assert trg_mask is not None, "trg_mask required for Transformer"
 
@@ -540,9 +560,14 @@ class TransformerDecoder(Decoder):
         x = self.layer_norm(x)
         output = self.output_layer(x)
 
-        return output, x, None, None
+        ctc_output = None
+        if isinstance(self.ctc_output_layer, nn.Module):
+            ctc_output = self.ctc_output_layer(encoder_output)
+
+        return output, x, None, None, ctc_output
 
     def __repr__(self):
-        return "%s(num_layers=%r, num_heads=%r)" % (
+        return "%s(num_layers=%r, num_heads=%r, ctc_layer=%r)" % (
             self.__class__.__name__, len(self.layers),
-            self.layers[0].trg_trg_att.num_heads)
+            self.layers[0].trg_trg_att.num_heads,
+            isinstance(self.ctc_output_layer, nn.Module))

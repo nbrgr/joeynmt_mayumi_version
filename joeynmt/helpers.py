@@ -17,6 +17,7 @@ import numpy as np
 
 import torch
 from torch import nn, Tensor
+from torch.nn.functional import pad as _pad
 from torch.utils.tensorboard import SummaryWriter
 
 import pkg_resources
@@ -25,7 +26,7 @@ import yaml
 from joeynmt.plotting import plot_heatmap
 
 if TYPE_CHECKING:
-    from joeynmt.data import TranslationDataset as Dataset
+    from joeynmt.data import TsvDataset
     from joeynmt.vocabulary import Vocabulary  # to avoid circular import
 
 
@@ -143,8 +144,9 @@ def set_seed(seed: int) -> None:
 
 
 def log_data_info(src_vocab: Vocabulary, trg_vocab: Vocabulary,
-                  train_data: Optional[Dataset], valid_data: Optional[Dataset],
-                  test_data: Optional[Dataset]) -> None:
+                  train_data: Optional[TsvDataset],
+                  valid_data: Optional[TsvDataset],
+                  test_data: Optional[TsvDataset]) -> None:
     """
     Log statistics of data and vocabulary.
 
@@ -160,16 +162,20 @@ def log_data_info(src_vocab: Vocabulary, trg_vocab: Vocabulary,
     logger.info(" Test dataset: %s", test_data)
 
     if train_data:
-        logger.info("First training example:\n\t[SRC] %s\n\t[TRG] %s",
-        " ".join(train_data.get_item(
-            idx=0, side="src", sample=False, filter_by_length=False)),
-        " ".join(train_data.get_item(
-            idx=0, side="trg", sample=False, filter_by_length=False)))
+        src = ""
+        if train_data.task == "MT":
+            src = "\n\t[SRC] " +  " ".join(train_data.get_item(
+                idx=0, side="src", sample=False, filter_by_length=False))
+        logger.info("First training example:%s\n\t[TRG] %s",
+                    src, " ".join(train_data.get_item(
+                idx=0, side="trg", sample=False, filter_by_length=False)))
 
-    logger.info("First 10 Src tokens: %s", src_vocab.log_vocab(10))
+    if src_vocab is not None:
+        logger.info("First 10 Src tokens: %s", src_vocab.log_vocab(10))
     logger.info("First 10 Trg tokens: %s", trg_vocab.log_vocab(10))
 
-    logger.info("Number of unique Src tokens (vocab_size): %d", len(src_vocab))
+    if src_vocab is not None:
+        logger.info("Number of unique Src tokens (vocab_size): %d", len(src_vocab))
     logger.info("Number of unique Trg tokens (vocab_size): %d", len(trg_vocab))
 
 
@@ -195,6 +201,17 @@ def write_list_to_file(output_path: Path, array: List[str]) -> None:
     with output_path.open('w', encoding="utf-8") as opened_file:
         for entry in array:
             opened_file.write(f"{entry}\n")
+
+
+def read_list_from_file(input_path: Path) -> List[str]:
+    """
+    Read list of str from file in `input_path`.
+
+    :param input_path: input file path
+    :return: list of strings
+    """
+    return [line.rstrip("\n") for line in
+            input_path.read_text(encoding='utf-8').splitlines()]
 
 
 def bpe_postprocess(string, bpe_type="subword-nmt") -> str:
@@ -408,6 +425,28 @@ def symlink_update(target: Path, link_name: Path) -> Optional[Path]:
     return None
 
 
+def lengths_to_padding_mask(lens: torch.Tensor) -> torch.BoolTensor:
+    bsz, max_lens = lens.size(0), torch.max(lens).item()
+    mask = torch.arange(max_lens).to(lens.device).view(1, max_lens)
+    mask = mask.expand(bsz, -1) >= lens.view(bsz, 1).expand(-1, max_lens)
+    return ~mask
+
+
+def pad(x, max_len, pad_index, dim=1):
+    if dim == 1:
+        batch_size, seq_len, _ = x.size()
+        offset = max_len - seq_len
+        new_x = _pad(x, (0, 0, 0, offset, 0, 0), "constant", pad_index) \
+            if x.size(1) < max_len else x
+    elif dim == -1:
+        batch_size, _, seq_len = x.size()
+        offset = max_len - seq_len
+        new_x = _pad(x, (0, offset), "constant", pad_index) \
+            if x.size(1) < max_len else x
+    assert new_x.size(dim) == max_len, (x.size(), offset, new_x.size(), max_len)
+    return new_x
+
+
 def flatten(array: List[List[Any]]) -> List[Any]:
     """
     flatten a nested 2D list. faster even with a very long array than
@@ -416,6 +455,53 @@ def flatten(array: List[List[Any]]) -> List[Any]:
     :return: flattened list
     """
     return functools.reduce(operator.iconcat, array, [])
+
+
+#from fairseq
+def align_words_to_bpe(bpe_tokens: List[str], word_tokens: List[str],
+                       bpe_type="sentencepiece", start=1) -> List[List[int]]:
+    """
+    align BPE to word tokenization formats.
+    :params bpe_tokens: list of BPE tokens
+    :params word_tokens: list of word tokens
+    :return: mapping from *word_tokens* to corresponding *bpe_tokens*.
+    """
+
+    # remove whitespaces/delimiters
+    postprocess = partial(bpe_postprocess, bpe_type=bpe_type)
+    bpe_tokens = [postprocess(str(x)) for x in bpe_tokens]
+    word_tokens = [postprocess(str(w)) for w in word_tokens]
+    assert "".join(bpe_tokens) == "".join(word_tokens)
+
+    # create alignment from every word to a list of BPE tokens
+    words2bpe = []
+    bpe_toks = filter(lambda item: item[1] != "", enumerate(bpe_tokens,
+                                                            start=start))
+    j, bpe_tok = next(bpe_toks)
+    for word_tok in word_tokens:
+        bpe_indices = []
+        while True:
+            if word_tok.startswith(bpe_tok):
+                bpe_indices.append(j)
+                word_tok = word_tok[len(bpe_tok) :]
+                try:
+                    j, bpe_tok = next(bpe_toks)
+                except StopIteration:
+                    j, bpe_tok = None, None
+            elif bpe_tok.startswith(word_tok):
+                # word_tok spans multiple BPE tokens
+                bpe_indices.append(j)
+                bpe_tok = bpe_tok[len(word_tok) :]
+                word_tok = ""
+            else:
+                raise Exception(f'Cannot align "{word_tok}" and "{bpe_tok}"')
+            if word_tok == "":
+                break
+        assert len(bpe_indices) > 0
+        words2bpe.append(bpe_indices)
+    assert len(words2bpe) == len(word_tokens)
+
+    return words2bpe
 
 
 def expand_reverse_index(reverse_index: List[int], n_best: int = 1) \
