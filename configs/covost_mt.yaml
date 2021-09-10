@@ -1,0 +1,116 @@
+name: "covost2-ende-mt"
+joeynmt_version: 1.4
+
+data:
+    task: "MT"
+    train: "/scratch5t/ohta/covost/en/train"
+    dev: "/scratch5t/ohta/covost/en/dev"
+    test: "/scratch5t/ohta/covost/en/test"
+    src:
+        lang: "en"
+        level: "bpe"
+        tokenizer: "sentencepiece"
+        lowercase: True
+        remove_punctuation: True
+        max_length: 100
+        voc_min_freq: 1
+        voc_limit: 7000
+        voc_file: "/scratch5t/ohta/covost/en/joint_vocab.tsv"
+        spm:
+            model_file: "/scratch5t/ohta/covost/en/spm7000.model"  # sentence piece model path
+            enable_sampling: True         # whether to enable BPE dropout
+    trg:
+        lang: "de"
+        level: "bpe"
+        tokenizer: "sentencepiece"
+        lowercase: False
+        remove_punctuation: False
+        max_length: 100
+        voc_min_freq: 1
+        voc_limit: 7000
+        voc_file: "/scratch5t/ohta/covost/en/joint_vocab.tsv"
+        spm:
+            model_file: "/scratch5t/ohta/covost/en/spm7000.model"  # sentence piece model path
+            enable_sampling: True         # whether to enable BPE dropout
+
+testing:
+    beam_size: 5
+    alpha: 1.0
+    sacrebleu:
+        remove_punctuation: False
+        tokenize: "intl"
+
+training:
+    #load_model: "/scratch/ohta/models/covost2_en_asr_seed123/best.ckpt"
+    reset_best_ckpt: False
+    reset_scheduler: False
+    reset_optimizer: False
+    reset_iter_state: False
+    random_seed: 789
+    optimizer: "adam"
+    adam_betas: [0.9, 0.99]
+    scheduling: "warmupinversesquareroot"
+    learning_rate: 2.0e-3
+    learning_rate_min: 1.0e-6
+    learning_rate_warmup: 10000
+    clip_grad_norm: 1.0
+    weight_decay: 0.0
+    label_smoothing: 0.1
+    batch_multiplier: 1
+    normalization: "batch"
+    batch_size: 4096
+    batch_type: "token"
+    eval_batch_size: 4096
+    eval_batch_type: "token"
+    early_stopping_metric: "eval_metric"
+    epochs: 20
+    updates: 100000
+    validation_freq: 5000
+    logging_freq: 500
+    eval_metrics: "bleu"
+    model_dir: "/scratch12t/ohta/models/covost2_ende_mt_seed789"
+    overwrite: True
+    shuffle: True
+    use_cuda: True
+    fp16: False
+    max_output_length: 120
+    print_valid_sents: [0, 1, 2]
+    keep_best_ckpts: 10
+    loss: "crossentropy"
+
+model:
+    initializer: "xavier"
+    init_gain: 1.0
+    embed_initializer: "xavier"
+    embed_init_gain: 1.0
+    bias_initializer: "zeros"
+    tied_embeddings: True
+    tied_softmax: True
+    encoder:
+        type: "transformer"
+        num_layers: 12
+        num_heads: 8
+        embeddings:
+            embedding_dim: 512
+            scale: True
+            dropout: 0.
+            freeze: False
+        # typically ff_size = 8 x hidden_size
+        hidden_size: 512
+        ff_size: 2048
+        dropout: 0.15
+        freeze: False
+    decoder:
+        type: "transformer"
+        num_layers: 6
+        num_heads: 8
+        embeddings:
+            embedding_dim: 512
+            scale: True
+            dropout: 0.
+            freeze: False
+        # ff_size = 8 x hidden_size
+        hidden_size: 512
+        ff_size: 2048
+        dropout: 0.15
+        freeze: False

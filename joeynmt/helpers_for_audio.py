@@ -7,10 +7,15 @@ import io
 import os
 from pathlib import Path
 import sys
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple, Union
 import unicodedata
 
 import numpy as np
+
+import torch
+import torchaudio
+import torchaudio.compliance.kaldi as ta_kaldi
+import torchaudio.sox_effects as ta_sox
 
 from joeynmt.constants import PAD_ID
 
@@ -27,21 +32,71 @@ def remove_punc(sent: str) -> str:
 
 
 class SpeechInstance:
-    def __init__(self, fbank_path: str, n_frames: int, ind: Union[int, str]):
+    def __init__(self, fbank_path: str, n_frames: int, idx: Union[int, str]):
         """Speech Instance
 
-        :param fbank_path: (str) Feature file path in the format of
-            "<zip path>:<byte offset>:<byte length>".
+        :param fbank_path: (str) Feature file path in the format either of
+            "<zip path>:<byte offset>:<byte length>" or "<file name>.mp3"
         :param n_frames: (int) number of frames
-        :param ind: index
+        :param idx: index
         """
         self.fbank_path = fbank_path
         self.n_frames = n_frames
-        self.id = ind
+        self.id = idx
+
+        if n_frames is None and self.fbank_path.suffix in ['.mp3', '.wav']:
+            self.n_frames = torchaudio.info(self.fbank_path)[0].length * 100
 
     def __len__(self):
         return self.n_frames
 
+# from fairseq
+def _convert_to_mono(waveform: torch.FloatTensor, sample_rate: int) \
+        -> torch.FloatTensor:
+    if waveform.shape[0] > 1:
+        effects = [["channels", "1"]]
+        return ta_sox.apply_effects_tensor(waveform, sample_rate, effects)[0]
+    return waveform
+
+# from fairseq
+def _get_torchaudio_fbank(waveform: torch.FloatTensor, sample_rate: int,
+                          n_bins: int = 80) -> np.ndarray:
+    """Get mel-filter bank features via TorchAudio."""
+    features = ta_kaldi.fbank(
+        waveform, num_mel_bins=n_bins, sample_frequency=sample_rate)
+    return features.numpy()
+
+# from fairseq
+def extract_fbank_features(waveform: torch.FloatTensor,
+                           sample_rate: int,
+                           n_frames: int,
+                           utt_id: str,
+                           feature_root: Optional[Path] = None,
+                           n_mel_bins: int = 80,
+                           overwrite: bool = False) -> Optional[np.ndarray]:
+    # pylint: disable=inconsistent-return-statements
+
+    output_path = None
+    if feature_root is not None:
+        output_path = feature_root / f"{utt_id}.npy"
+
+    if output_path is not None and output_path.is_file() and not overwrite:
+        return
+
+    _waveform = _convert_to_mono(waveform, sample_rate)
+    _waveform = waveform * (2 ** 15)  # Kaldi compliance: 16-bit signed integers
+
+    try:
+        features = _get_torchaudio_fbank(_waveform, sample_rate, n_mel_bins)
+        assert abs(features.shape[0] - n_frames) <= 1, features.shape
+    except Exception as e:
+        raise ValueError(f"torchaudio faild to extract mel filterbank features "
+                         f"at {utt_id}. {e}")
+
+    if output_path is not None:
+        np.save(output_path.as_posix(), features)
+    else:
+        return features
 
 # from fairseq
 def _is_npy_data(data: bytes) -> bool:
@@ -60,6 +115,12 @@ def _get_features_from_zip(path, byte_offset, byte_size):
     return features
 
 # from fairseq
+def get_n_frames(wave_length: int, sample_rate: int):
+    duration_ms = int(wave_length / sample_rate * 1000)
+    n_frames = int(1 + (duration_ms - 25) / 10)
+    return n_frames
+
+# from fairseq
 def get_features(root_path: Path, fbank_path: str) -> np.ndarray:
     """Get speech features from ZIP file
        accessed via byte offset and length
@@ -68,12 +129,16 @@ def get_features(root_path: Path, fbank_path: str) -> np.ndarray:
     """
     _path, *extra = fbank_path.split(":")
     _path = root_path / _path
-    if not os.path.exists(_path):
+    if not _path.is_file():
         raise FileNotFoundError(f"File not found: {_path}")
 
     if len(extra) == 0:
         if _path.suffix == ".npy":
             features = np.load(_path.as_posix())
+        elif _path.suffix in [".mp3", ".wav"]:
+            waveform, sample_rate = torchaudio.load(_path.as_posix())
+            num_frames = get_n_frames(waveform.size(1), sample_rate)
+            features = extract_fbank_features(waveform, sample_rate, num_frames)
         else:
             raise ValueError(f"Invalid file type: {_path}")
     elif len(extra) == 2:
@@ -81,7 +146,7 @@ def get_features(root_path: Path, fbank_path: str) -> np.ndarray:
         extra = [int(i) for i in extra]
         features = _get_features_from_zip(_path, extra[0], extra[1])
     else:
-        raise ValueError(f"Invalid path: {fbank_path}")
+        raise ValueError(f"Invalid path: {root_path / fbank_path}")
     return features
 
 

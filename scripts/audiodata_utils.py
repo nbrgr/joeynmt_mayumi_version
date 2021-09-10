@@ -2,82 +2,25 @@
 
 # Adapted from https://github.com/pytorch/fairseq/blob/master/examples/speech_to_text/data_utils.py
 
-import re
-import io
+from collections import Counter
 import csv
-import string
+import io
 import itertools
+from pathlib import Path
+import string
 from typing import Optional, Callable, List
 from tqdm import tqdm
-from pathlib import Path
+import re
 import zipfile
 
 import numpy as np
 import pandas as pd
 import sentencepiece as sp
 
-import torch
-import torchaudio
-import torchaudio.compliance.kaldi as ta_kaldi
-import torchaudio.sox_effects as ta_sox
-
 from joeynmt.constants import BOS_TOKEN, PAD_TOKEN, EOS_TOKEN, UNK_TOKEN, \
     UNK_ID, EOS_ID, BOS_ID, PAD_ID
+from joeynmt.helpers import flatten
 from joeynmt.helpers_for_audio import _is_npy_data, _get_features_from_zip
-
-
-def _sox_convert(waveform: torch.FloatTensor, sample_rate: int,
-                 effects: List[List[str]]) -> torch.FloatTensor:
-    return ta_sox.apply_effects_tensor(waveform, sample_rate, effects)[0]
-
-
-def _convert_to_mono(waveform: torch.FloatTensor, sample_rate: int) -> np.ndarray:
-    if waveform.shape[0] > 1:
-        effects = [["channels", "1"]]
-        return _sox_convert(waveform, sample_rate, effects).numpy()
-    return waveform
-
-
-def _get_torchaudio_fbank(waveform: torch.FloatTensor, sample_rate: int,
-                          n_bins: int = 80) -> np.ndarray:
-    """
-    Get mel-filter bank features via TorchAudio.
-    """
-    features = ta_kaldi.fbank(
-        waveform, num_mel_bins=n_bins, sample_frequency=sample_rate)
-    return features.numpy()
-
-
-def extract_fbank_features(waveform: torch.FloatTensor,
-                           n_frames: int,
-                           utt_id: str,
-                           feature_root: Optional[Path] = None,
-                           sample_rate: int = 16000,
-                           n_mel_bins: int = 80,
-                           overwrite: bool = False) -> Optional[np.ndarray]:
-    # pylint: disable=inconsistent-return-statements
-
-    output_path = None
-    if feature_root is not None:
-        output_path = feature_root / f"{utt_id}.npy"
-
-    if output_path is not None and output_path.is_file() and not overwrite:
-        return
-
-    _waveform = _convert_to_mono(waveform, sample_rate)
-    _waveform = waveform * (2 ** 15)  # Kaldi compliance: 16-bit signed integers
-
-    try:
-        features = _get_torchaudio_fbank(_waveform, sample_rate, n_mel_bins)
-        assert abs(features.shape[0] - n_frames) <= 1, features.shape
-    except Exception as e:
-        raise ValueError(f"torchaudio faild to extract mel filterbank features "
-                         f"at {utt_id}. {e}")
-
-    if output_path is not None:
-        np.save(output_path.as_posix(), features)
-    else:
-        return features
 
 
 def get_zip_manifest(zip_path: Path, npy_root: Optional[Path] = None):
@@ -108,12 +51,6 @@ def get_zip_manifest(zip_path: Path, npy_root: Optional[Path] = None):
     return manifest
 
 
-def get_n_frames(waveform, sample_rate):
-    duration_ms = int(waveform.size(1) / sample_rate * 1000)
-    n_frames = int(1 + (duration_ms - 25) / 10)
-    return n_frames
-
-
 def create_zip(data_root: Path, zip_path: Path):
     paths = list(data_root.glob("*.npy"))
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as f:
@@ -128,9 +65,11 @@ def save_tsv(df: pd.DataFrame, path: Path, header: bool = True) -> None:
     df.to_csv(path.as_posix(), sep="\t", header=header, index=False,
               encoding="utf-8", escapechar="\\", quoting=csv.QUOTE_NONE)
 
+
 def load_tsv(path: Path):
     return pd.read_csv(path.as_posix(), sep="\t", header=0, encoding="utf-8",
                        escapechar="\\", quoting=csv.QUOTE_NONE, na_filter=False)
+
 
 def build_sp_model(input_path: Path, model_path_prefix: Path,
                    export_vocab: bool = True, **kwargs):
@@ -156,22 +95,18 @@ def build_sp_model(input_path: Path, model_path_prefix: Path,
     ]
     if 'user_defined_symbols' in kwargs.keys():
         arguments.append(f"--user_defined_symbols={kwargs['user_defined_symbols']}")
-    sp.SentencePieceTrainer.Train(" ".join(arguments))
+    #sp.SentencePieceTrainer.Train(" ".join(arguments))
 
     # Load spm model
     spm = sp.SentencePieceProcessor()
     spm.Load(model_path_prefix.with_suffix(".model").as_posix())
     if export_vocab:    # Export vocab
-        itos = {i: spm.IdToPiece(i) for i in range(spm.GetPieceSize())}
-        assert (itos.get(UNK_ID) == UNK_TOKEN
-                and itos.get(PAD_ID) == PAD_TOKEN
-                and itos.get(BOS_ID) == BOS_TOKEN
-                and itos.get(EOS_ID) == EOS_TOKEN)
-        stoi = {s: i for i, s in itos.items()
-                if s not in {UNK_TOKEN, BOS_TOKEN, EOS_TOKEN, PAD_TOKEN}}
-        with model_path_prefix.with_suffix(".txt").open("w") as f_out:
-            for s, _ in sorted(stoi.items(), key=lambda x: x[1]):
-                f_out.write(f"{s}\n")
+        lines = input_path.read_text(encoding="utf8").splitlines()
+        tokens = Counter(flatten([spm.encode(s, out_type=str) for s in lines]))
+        with model_path_prefix.with_suffix(".tsv").open("w") as f_out:
+            for piece, size in tokens.most_common():
+                if piece not in {UNK_TOKEN, BOS_TOKEN, EOS_TOKEN, PAD_TOKEN}:
+                    f_out.write(f"{piece}\t{size}\n")
     return spm
 
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """
+Prepare CoVoST2
+
 Adapted from https://github.com/pytorch/fairseq/blob/master/examples/speech_to_text/prep_mustc_data.py
 
     expected dir structure:
@@ -37,6 +39,7 @@ from typing import Tuple, Callable
 from functools import partial
 from tqdm import tqdm
 import urllib.request
+import math
 from multiprocessing import  Pool, cpu_count
 
 import pandas as pd
@@ -47,33 +50,38 @@ from torch.utils.data import Dataset
 import torchaudio
 from torchaudio.datasets.utils import download_url, extract_archive
 
-from audiodata_utils import create_zip, extract_fbank_features, load_tsv, \
-    get_zip_manifest, build_sp_model, Normalizer, save_tsv, get_n_frames
+from audiodata_utils import build_sp_model, create_zip, get_zip_manifest, \
+    load_tsv, Normalizer, save_tsv
 
 from joeynmt.helpers import write_list_to_file
-from joeynmt.helpers_for_audio import remove_punc
+from joeynmt.helpers_for_audio import extract_fbank_features, get_n_frames, \
+    remove_punc
 
 
 COLUMNS = ["id", "src", "n_frames", "trg", "speaker"]
 
 N_MEL_FILTERS = 80
 N_WORKERS = 16 #cpu_count()
-SP_MODEL_TYPE = "unigram" # one of ["bpe", "unigram", "char"]
-VOCAB_SIZE = 8000 #joint vocab
+SP_MODEL_TYPE = "bpe" # one of ["bpe", "unigram", "char"]
+VOCAB_SIZE = 7000 #joint vocab
 LOWERCASE = {'en': True, 'de': False}
 REMOVE_PUNC = {'en': True, 'de': False}
 
 
 def _check_audio_meta(df: pd.DataFrame, root: Path):
     def _validate(path):
-        flag = False
+        n_frames = float("nan")
         try:
-            _ = torchaudio.info(path.as_posix())
-            flag = True
-        except Exception:
+            meta = torchaudio.info(path.as_posix())
+            assert hasattr(meta, 'num_frames')
+            # -1152 for sox compliance
+            n_frames = get_n_frames(meta.num_frames - 1152, meta.sample_rate)
+        except Exception as e:
+            #print(e)
             pass
-        return flag
-    df['is_valid'] = df['path'].apply(lambda x: _validate(root / x))
+        return n_frames
+
+    df['num_frames'] = df['path'].apply(lambda x: _validate(root / x))
     return df
 
 
@@ -155,17 +163,17 @@ class CoVoST2(Dataset):
         # whether to call torchaudio.load()
         self.return_wav = return_wav
 
-
     def _drop_invalid(self, df: pd.DataFrame, mp3_path: Path) -> pd.DataFrame:
         """check AudioMetaData"""
         func = partial(_check_audio_meta, root=mp3_path)
         df = _parallel_df_apply(df, func, n_cores=N_WORKERS)
-        for idx, row in df[df['is_valid'] == False].iterrows():
+        for idx, row in df[df['num_frames'].isna()].iterrows():
             print(f'Skip {idx}-th instance in {mp3_path / row["path"]}.')
-        return df[df['is_valid'] == True].reset_index(drop=True)
+        df.dropna(subset=['num_frames'], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+        return df
 
-
-    def __getitem__(self, n: int) -> Tuple[Tensor, int, str, str, str, str]:
+    def __getitem__(self, n: int) -> Tuple[Tensor, int, int, str, str, str, str]:
         """Load the n-th sample from the dataset.
 
         :param n: The index of the sample to be loaded
@@ -173,22 +181,21 @@ class CoVoST2(Dataset):
                               translation, speaker_id, utterance_id)``
         """
         data = self.df.iloc[n]
-        assert data['is_valid'] == True, data
+        assert not math.isnan(data['num_frames']), data
 
         mp3_path = self.root / "clips" / data["path"]
         transcription = data["sentence"]
         translation = data["translation"] if self.has_translation else None
         speaker_id = data["client_id"]
         utterance_id = data["path"].replace(".mp3", "")
-        num_frames = data['num_frames'] if 'num_frames' in data else None
+        num_frames = int(data['num_frames'])
         if self.return_wav:
             waveform, sample_rate = torchaudio.load(mp3_path)
-            if num_frames is None:
-                num_frames = get_n_frames(waveform, sample_rate)
-                self.data[n]['num_frames'] = num_frames
+            #if num_frames is None:
+            #    num_frames = get_n_frames(waveform.size(1), sample_rate)
+            #    self.data[n]['num_frames'] = num_frames
         else:
             waveform, sample_rate = None, None
-            #assert num_frames is not None
         return (waveform, sample_rate, num_frames, transcription, translation,
                 speaker_id, utterance_id)
 
@@ -245,9 +252,10 @@ class Tatoeba(CoVoST2):
 
 def process(data_root, src_lang, trg_lang):
     root = Path(data_root).absolute()
+    curr_root = root / src_lang
 
     # filterbank dir (shared across splits)
-    feature_root = root / src_lang / CoVoST2.FEATURE_ROOT
+    feature_root = curr_root / CoVoST2.FEATURE_ROOT
     feature_root.mkdir(exist_ok=True)
 
     # Extract features
@@ -257,17 +265,17 @@ def process(data_root, src_lang, trg_lang):
         print(f"Fetching split {split}...")
         datasets[split] = CoVoST2(root, src_lang, trg_lang, split)
 
-        print(f"Extracting log mel filter bank features ...")
+        print(f"Extracting log mel filter bank features...")
         assert datasets[split].return_wav is True
-        for i, (wav, sample_rate, n_frames, _, _, spk_id, utt_id) in enumerate(tqdm(datasets[split])):
+        for i, (wav, sample_rate, n_frames, _, _, spk_id, utt_id) \
+                in enumerate(tqdm(datasets[split])):
             try:
-                extract_fbank_features(wav, n_frames, utt_id,
-                                       sample_rate=sample_rate,
+                extract_fbank_features(wav, sample_rate, n_frames, utt_id,
                                        feature_root=feature_root,
                                        n_mel_bins=N_MEL_FILTERS,
                                        overwrite=False)
             except Exception as e:
-                print(f'Skip {i}-th instance in {root / src_lang / utt_id}.mp3.', e)
+                print(f'Skip {i}-th instance in {curr_root / utt_id}.mp3.', e)
                 continue
 
     # Pack features into ZIP
@@ -281,7 +289,8 @@ def process(data_root, src_lang, trg_lang):
     with tqdm(total=len(zip_manifest)) as pbar:
         for split, dataset in datasets.items():
             dataset.return_wav = False  # a bit faster...
-            for i, (_, _, n_frames, src_utt, trg_utt, spk_id, utt_id) in enumerate(dataset):
+            for i, (_, _, n_frames, src_utt, trg_utt, spk_id, utt_id) \
+                    in enumerate(dataset):
                 # cleanup text
                 if LOWERCASE[src_lang]:
                     src_utt = src_utt.lower()
@@ -304,20 +313,20 @@ def process(data_root, src_lang, trg_lang):
                     }
                     all_data.append(record)
                 except Exception as e:
-                    print(f'Skip {i}-th instance in {root / src_lang / utt_id}.mp3.', e)
+                    print(f'Skip {i}-th instance in {curr_root / utt_id}.mp3.', e)
                 pbar.update(1)
         all_df = pd.DataFrame.from_records(all_data)
-        save_tsv(all_df, (root / src_lang / 'joey_all_data_tmp.tsv'))
+        save_tsv(all_df, (curr_root / 'joey_all_data_tmp.tsv'))
         del all_data
-
+    
     # Generate joint vocab
     print("Building joint vocab...")
-    raw_textfile = root / src_lang / f"train.{src_lang}{trg_lang}"
+    raw_textfile = curr_root / f"train.{src_lang}{trg_lang}"
     train_df = all_df[all_df.split == "train"]
-    train = pd.concat([train_df.src_utt, train_df.trg_utt])
+    train = pd.concat([train_df[f'{src_lang}_utt'], train_df[f'{trg_lang}_utt']])
     write_list_to_file(raw_textfile, train.to_list())
 
-    spm_filename = root / src_lang / f"spm_{SP_MODEL_TYPE}{VOCAB_SIZE}"
+    spm_filename = curr_root / f"spm_{SP_MODEL_TYPE}{VOCAB_SIZE}"
     kwargs = {'model_type': SP_MODEL_TYPE,
               'vocab_size': VOCAB_SIZE,
               'character_coverage': 1.0,
@@ -332,8 +341,8 @@ def process(data_root, src_lang, trg_lang):
             #split_df[f'{_lang}_utt'] = split_df[f'{_lang}_utt'].apply(
             #    lambda x: ' '.join(spm.encode(x, out_type=str)))
             save_tsv(split_df.rename(columns={f'{_lang}_utt': 'trg'})[COLUMNS],
-                     root / src_lang / f"joey_{_task}_{split}.tsv")
-            write_list_to_file(root / src_lang / f"{split}.{_lang}",
+                     curr_root / f"joey_{_task}_{split}.tsv")
+            write_list_to_file(curr_root / f"{split}.{_lang}",
                                split_df[f'{_lang}_utt'].to_list())
         print(f'\t{split} tsv saved.')
     print("Done!")

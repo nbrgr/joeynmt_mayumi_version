@@ -75,17 +75,51 @@ For details, follow the tutorial in [the docs](https://joeynmt.readthedocs.io). 
 
 ### Data Preparation
 
-#### Parallel Data
-For training a translation model, you need parallel data, i.e. a collection of source sentences and reference translations that are aligned sentence-by-sentence and stored in two files, 
+#### Text Data
+For training a text translation model, you need parallel data, i.e. a collection of source sentences and reference translations that are aligned sentence-by-sentence and stored in two files, 
 such that each line in the reference file is the translation of the same line in the source file.
 
-#### Pre-processing
+In version<=1.3, all input texts are loaded on memory before training starts. It might cause a memory error on huge (i.e. >50M lines) datasets. In that case, please consider upgrading JoeyNMT to version>=1.4, which loads training data on-the-fly.
+
+#### Audio Data
+SpeechJoey supports audio features in spectrogram (mel-filterbank). Please refer the "Audio Pre-processing" description below
+ and a sample config file for speech-to-text tasks. In interactive inference mode, you also can feed raw audio (a path
+ to mp3 or wav file) instead of spectrogram.
+
+#### Text Pre-processing
+##### version>=1.4
+JoeyNMT has an integrated tokenization module. That is, you don't have to apply the tokenization your text beforehand.
+ Still, you need to train a tokenizer before you start training/testing/translating. There are several preprocessing options
+ such as `lowercase`, `remove_punctuation`, `max_length` etc. which will be applied during mini-batch construction on-the-fly.
+ Please note that you might need retrain your tokenization model when you change these options.
+
+In version>=1.4, you can specify the preprocessing options per language. For example, you can lowercase the English side,
+ while keeping true casing in German side. or you can tokenize Chinese texts in Character level, while tokenizing English
+ texts in Word level. If you use tied embeddings (shared vocabulary), you should repeat the same setting in both `src` and
+ `trg` in data section of config. Please check the configuration file for more details.
+
+In speech-to-text tasks, transcribed texts are sometimes normalized, i.e. `100` -> `hundered`, which makes direct comparison
+ to other existing systems difficult. We provide all the normalization steps in `scripts/audiodata_utils.py` for the sake of
+ reproducibility.
+
+##### version<=1.3
 Before training a model on it, parallel data is most commonly filtered by length ratio, tokenized and true- or lowercased.
 
 The Moses toolkit provides a set of useful [scripts](https://github.com/moses-smt/mosesdecoder/tree/master/scripts) for this purpose.
 
 In addition, you might want to build the NMT model not on the basis of words, but rather sub-words or characters (the `level` in JoeyNMT configurations).
 Currently, JoeyNMT supports the byte-pair-encodings (BPE) format by [subword-nmt](https://github.com/rsennrich/subword-nmt) and [sentencepiece](https://github.com/google/sentencepiece).
+
+Note that JoeyNMT expects the test data (both in test mode (text file) and translation mode (text stream)) is pre-tokenized
+in the same style as the train data specified in data section of the given config. 
+
+#### Audio Pre-processing
+To extract spectrogram from raw audio data, we utilize the torchaudio library. Since audio features are too large to store
+on memory, we save the extracted spectrogram features in numpy array format, pack into a single zip file, and retrieve them using
+the byte offset information.
+
+SpeechJoey also provides data augmentation modules such as Spec Augment and Ceptral Mean Variance Normalization (CMVN), which
+also called on-the-fly during training. You don't have to apply those in your saved features before training.
 
 ### Configuration
 Experiments are specified in configuration files, in simple [YAML](http://yaml.org/) format. You can find examples in the `configs` directory.

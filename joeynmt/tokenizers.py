@@ -132,34 +132,32 @@ class EvaluationTokenizer(BasicTokenizer):
                                   self.tokenizer.__class__.__name__)
 
 
-def build_tokenizer(task, data_cfg):
-    tokenizer = {}
-    if data_cfg["level"] == "bpe":
-        if data_cfg.get("bpe_type", "sentencepiece") == "sentencepiece":
-            if task == "MT":
-                tokenizer['src'] = SentencePieceTokenizer(
-                    level=data_cfg["level"], lowercase=data_cfg["lowercase"],
-                    remove_punctuation=data_cfg.get("remove_punctuation", False),
-                    **data_cfg["src_spm"])
-            tokenizer['trg'] = SentencePieceTokenizer(
-                level=data_cfg["level"], lowercase=data_cfg["lowercase"],
-                remove_punctuation=data_cfg.get("remove_punctuation", False),
-                **data_cfg["trg_spm"])
-        else:
-            raise ConfigurationError("We currently support sentencepiece bpe"
-                                     " only.")
+def build_tokenizer(data_cfg: dict, side: str):
+    tokenizer = None
+    cfg = data_cfg[side]
+    try:
+        tokenizer_type = cfg.get("tokenizer",
+                                 cfg.get("bpe_type", "sentencepiece"))
+        if tokenizer_type == "sentencepiece":
+            assert cfg["level"] == "bpe"
+            tokenizer = SentencePieceTokenizer(
+                level=cfg["level"],
+                lowercase=cfg["lowercase"],
+                remove_punctuation=cfg.get("remove_punctuation", False),
+                **cfg["spm"])
+        elif tokenizer_type == "subword-nmt":
             # TODO: support subword-nmt
-
-    elif data_cfg["level"] in ["word", "char"]:
-        basic_tokenizer = BasicTokenizer(
-            level=data_cfg["level"], lowercase=data_cfg["lowercase"],
-            remove_punctuation=data_cfg.get("remove_punctuation", False))
-        tokenizer = {'src': basic_tokenizer, 'trg': basic_tokenizer}
-    else:
-        raise ConfigurationError("Invalid tokenization level. Valid options:"
-                                 " 'bpe', 'word', 'char'.")
-        # TODO: support different src tokenization from trg
-    if "src" in tokenizer:
-        logger.info(f'Src tokenizer: {tokenizer["src"]}')
-    logger.info(f'Trg tokenizer: {tokenizer["trg"]}')
+            assert cfg["level"] == "bpe"
+            raise NotImplementedError("subword-nmt is currently not supported.")
+        else:
+            assert cfg["level"] in ["word", "char"]
+            tokenizer = BasicTokenizer(
+                level=cfg["level"],
+                lowercase=cfg["lowercase"],
+                remove_punctuation=cfg.get("remove_punctuation", False))
+        logger.info(f'{side.title()} tokenizer: {tokenizer}')
+    except Exception as e:
+        logger.exception(e)
+        raise Exception(e)
     return tokenizer
+

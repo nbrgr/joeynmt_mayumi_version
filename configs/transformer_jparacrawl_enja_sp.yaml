@@ -1,38 +1,46 @@
 name: "jparacrawl-enja-sp-transformer"
 
 data:
-  src: "en"
-  trg: "ja"
+  task: "MT"
   train: "/scratch5t/ohta/jparacrawl/train"
   dev: "/scratch5t/ohta/iwslt17/tst2016"
   test: "/scratch5t/ohta/iwslt17/tst2017"
-  random_train_subset: -1
-  level: "bpe"
-  lowercase: False
-  max_sent_length: 500
-  src_voc_min_freq: 2
-  src_voc_limit: 5000
-  trg_voc_min_freq: 2
-  trg_voc_limit: 9000
-  src_vocab: "/scratch5t/ohta/jparacrawl/volt/vocab.en.tsv"
-  trg_vocab: "/scratch5t/ohta/jparacrawl/volt/vocab.ja.tsv"
-  spm_src:
-    model_file: "/scratch5t/ohta/jparacrawl/volt/spm10000.en.model"
-    enable_sampling: True
-  spm_trg:
-    model_file: "/scratch5t/ohta/jparacrawl/volt/spm9000.ja.model"
-    enable_sampling: True
+  src:
+    lang: "en"
+    level: "bpe"
+    tokenizer: "sentencepiece"
+    lowercase: False
+    remove_punctuation: False
+    max_length: 256
+    voc_min_freq: 2
+    voc_limit: 32000
+    voc_file: "/scratch5t/ohta/jparacrawl/spm.en.32000.vocab.tsv"
+    spm:
+      model_file: "/scratch5t/ohta/jparacrawl/spm.en.32000.model"  # sentence piece model path
+      enable_sampling: True         # whether to enable BPE dropout
+  trg:
+    lang: "ja"
+    level: "bpe"
+    tokenizer: "sentencepiece"
+    lowercase: False
+    remove_punctuation: False
+    max_length: 512
+    voc_min_freq: 2
+    voc_limit: 32000
+    voc_file: "/scratch5t/ohta/jparacrawl/spm.ja.32000.ja.tsv"
+    spm:
+      model_file: "/scratch5t/ohta/jparacrawl/spm.ja.32000.ja.model"  # sentence piece model path
+      enable_sampling: True         # whether to enable BPE dropout
 
 testing:
   beam_size: 6
   alpha: 1.0
-  postproccess: True
-  bpe_type: "sentencepiece"
   sacrebleu:
     remove_whitespace: False
     tokenize: "ja-mecab"
 
 training:
+  load_model: "/scratch12t/ohta/models/jparacrawl_enja/avg5.ckpt"
   random_seed: 42
   optimizer: "adam"
   normalization: "tokens"
@@ -46,18 +54,19 @@ training:
   weight_decay: 0.0
   label_smoothing: 0.1
   batch_multiplier: 8
-  batch_size: 4096 # 2048 per device
+  batch_size: 8196 # 4096 per device
   batch_type: "token"
   early_stopping_metric: "eval_metric"
   epochs: 10
+  updates: 100000
   validation_freq: 500
   logging_freq: 100
-  eval_metric: "bleu"
-  model_dir: "/scratch12t/ohta/models/jparacrawl_enja_sp_transformer_2gpu"
-  overwrite: True
+  eval_metrics: "bleu"
+  model_dir: "/scratch12t/ohta/models/jparacrawl_enja_sp32000"
+  overwrite: False
   shuffle: True
   use_cuda: True
-  fp16: False
+  fp16: True
   max_output_length: 100
   print_valid_sents: [2000, 2001, 2002, 2003, 2004]
   keep_best_ckpts: 5

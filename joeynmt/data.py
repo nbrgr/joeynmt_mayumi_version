@@ -9,8 +9,6 @@ import sys
 from typing import Callable, List, Optional, Tuple, Union
 
 import pandas as pd
-import sentencepiece as spm
-
 import torch
 from torch.utils.data import BatchSampler, DataLoader, Dataset, \
     RandomSampler, Sampler, SequentialSampler
@@ -27,7 +25,7 @@ from joeynmt.vocabulary import Vocabulary, build_vocab
 logger = logging.getLogger(__name__)
 
 
-def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
+def load_data(data_cfg: dict, datasets: list = None) \
         -> Tuple[Vocabulary, Vocabulary, Optional[Dataset], Optional[Dataset],
                  Optional[Dataset]]:
     """
@@ -45,7 +43,6 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     :param data_cfg: configuration dictionary for data
         ("data" part of configuration file)
     :param datasets: list of dataset names to load
-    :param num_workers:
     :returns:
         - src_vocab: source vocabulary extracted from training data
         - trg_vocab: target vocabulary extracted from training data
@@ -59,10 +56,13 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     task = data_cfg.get("task", "MT")
     assert task in {"MT", "s2t"}
 
+    src_cfg = data_cfg["src"]
+    trg_cfg = data_cfg["trg"]
+
     # load data from files
     if task == "MT":
-        src_lang = data_cfg["src"]
-        trg_lang = data_cfg["trg"]
+        src_lang = src_cfg["lang"]
+        trg_lang = trg_cfg["lang"]
     elif task == "s2t":
         root_path = data_cfg["root_path"]
     train_path = data_cfg.get("train", None)
@@ -73,10 +73,10 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
         raise ValueError('Please specify at least one data source path.')
 
     _max_sent_length = data_cfg.get("max_sent_length", -1) # backward compatibility
-    src_max_length = data_cfg.get("src_max_length", _max_sent_length)
-    trg_max_length = data_cfg.get("trg_max_length", _max_sent_length)
+    src_max_length = src_cfg.get("max_length", _max_sent_length)
+    trg_max_length = trg_cfg.get("max_length", _max_sent_length)
     if task == "s2t":
-        num_freq = data_cfg.get("num_freq", 80) # frequency dimension
+        num_freq = src_cfg.get("num_freq", 80) # frequency dimension
 
     # data augmentation
     kwargs = {}
@@ -110,22 +110,28 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
 
     # load tokenizer
     logger.info("Loading tokenizer...")
-    tokenizer = build_tokenizer(task, data_cfg)
+    tokenizer = {}
+    if task == "MT":
+        tokenizer['src'] = build_tokenizer(data_cfg, "src")
+    tokenizer['trg'] = build_tokenizer(data_cfg, "trg")
 
     # build vocab
     logger.info("Building vocabulary...")
 
-    _src_vocab = data_cfg.get("src_vocab", None)
+    _src_vocab = src_cfg.get("voc_file", None)
     src_vocab_file = None if _src_vocab is None else Path(_src_vocab)
-    src_voc_size = data_cfg.get("src_voc_limit", sys.maxsize)
-    src_min_freq = data_cfg.get("src_voc_min_freq", 1)
-    _trg_vocab = data_cfg.get("trg_vocab", None)
+    src_voc_size = src_cfg.get("voc_limit", sys.maxsize)
+    src_min_freq = src_cfg.get("voc_min_freq", 1)
+
+    _trg_vocab = trg_cfg.get("voc_file", None)
     trg_vocab_file = None if _trg_vocab is None else Path(_trg_vocab)
-    trg_voc_size = data_cfg.get("trg_voc_limit", sys.maxsize)
-    trg_min_freq = data_cfg.get("trg_voc_min_freq", 1)
+    trg_voc_size = trg_cfg.get("voc_limit", sys.maxsize)
+    trg_min_freq = trg_cfg.get("voc_min_freq", 1)
 
     src_list, trg_list = None, None
-    if src_vocab_file is None or trg_vocab_file is None:
+    if (src_vocab_file is None and task == "MT") \
+            or (trg_vocab_file is None and task == "s2t"):
+        assert train_data is not None
         src_list, trg_list = train_data.get_raw_texts()
         if task == "MT":
             src_list = [tokenizer['src'](sent) for sent in src_list]
@@ -164,7 +170,7 @@ def load_data(data_cfg: dict, datasets: list = None, num_workers: int = 0) \
     dev_data = None
     if "dev" in datasets and dev_path is not None:
         logger.info("Loading dev data...")
-        kwargs["random_subset"] = data_cfg.get("valid_random_subset", -1)
+        kwargs["random_subset"] = data_cfg.get("dev_random_subset", -1)
         if task == "s2t":
             dev_data = TsvDataset(path=(Path(root_path)/dev_path),
                                   task=task,
@@ -278,7 +284,7 @@ def make_data_iter(dataset: Dataset,
                    batch_type: str = "sentence",
                    seed: int = 42,
                    shuffle: bool = False,
-                   num_workers: int = 0,
+                   #num_workers: int = 0,
                    pad_index: int = PAD_ID,
                    normalization: str = "batch",
                    device: torch.device = torch.device("cpu")) -> DataLoader:
@@ -291,7 +297,7 @@ def make_data_iter(dataset: Dataset,
     :param seed: random seed for shuffling
     :param shuffle: whether to shuffle the data before each epoch
         (no effect if set to True for testing)
-    :param num_workers: number of cpus for multiprocessing
+    #:param num_workers: number of cpus for multiprocessing
     :param pad_index:
     :param device:
     :param normalization:
@@ -337,6 +343,22 @@ def make_data_iter(dataset: Dataset,
 
 
 class TsvDataset(Dataset):
+    """
+    TsvDataset which looks up input data.
+    - used for tsv data with audio paths.
+    - holds pointer to preprocessing functions.
+
+    :param path: file name (w/o ext)
+    :param exts: file ext (language code pair) # not used
+    :param task: "MT" or "s2t"
+    :param src_max_length: max length of src instance
+    :param trg_max_length: max length of trg instance
+    :param is_train: bool indicator for train set or not
+    :param src_tokenizer: tokenizer for src
+    :param trg_tokenizer: tokenizer for trg
+    :param src_padding: padding function for src
+    :param trg_padding: padding function for trg
+    """
     def __init__(self, path: Path,
                  exts: str = None, # not used
                  task: str = "s2t",
@@ -349,12 +371,10 @@ class TsvDataset(Dataset):
                  trg_padding: Callable = None,
                  **kwargs):
         self.task = task
+        assert task == "s2t"
 
         # tokenizers
         self.tokenizer = {'src': src_tokenizer, 'trg': trg_tokenizer}
-
-        # preprocessing
-        self.max_len = {'src': src_max_length, 'trg': trg_max_length}
 
         # padding func: will be assigned after vocab is built
         self.padding = {'src': src_padding, 'trg': trg_padding}
@@ -371,6 +391,10 @@ class TsvDataset(Dataset):
         self.is_train = is_train
         if self.is_train:
             assert self.has_trg
+
+        # filter by length
+        self.max_len = {'src': src_max_length if is_train else -1,
+                        'trg': trg_max_length if is_train else -1}
 
         # data augmentation
         self.specaugment = kwargs.get("specaugment", None) if self.is_train else None
@@ -397,7 +421,7 @@ class TsvDataset(Dataset):
         if side == "src":
             item = SpeechInstance(fbank_path=line['src'],
                                   n_frames=line['n_frames'],
-                                  ind=line['id'])
+                                  idx=line['id'])
             if filter_by_length and len(item) > self.max_len['src']:
                 item = None
         elif side == "trg":
@@ -411,10 +435,10 @@ class TsvDataset(Dataset):
         """cache item pair of given index. called by BatchSampler."""
         src, trg = None, None
         src = self.get_item(idx=idx, side='src', sample=self.is_train,
-                            filter_by_length=self.is_train and self.max_len['src'] > 0)
+                            filter_by_length=self.max_len['src'] > 0)
         if self.has_trg:
             trg = self.get_item(idx=idx, side='trg', sample=self.is_train,
-                                filter_by_length=self.is_train and self.max_len['trg'] > 0)
+                                filter_by_length=self.max_len['trg'] > 0)
             if trg is None:
                 src = None
         self.cache[idx] = (src, trg)
@@ -450,12 +474,12 @@ class TsvDataset(Dataset):
 
 class TranslationDataset(TsvDataset):
     """
-    TranslationDataset which stores raw sentence pairs.
-    used for file data.
+    TsvDataset which stores raw sentence pairs.
+    - used for text file data in the format of one sentence per line.
 
     :param path: file name (w/o ext)
     :param exts: file ext (language code pair)
-    :param task:
+    :param task: "MT" or "s2t"
     :param src_max_length: max length of src instance
     :param trg_max_length: max length of trg instance
     :param is_train: bool indicator for train set or not
@@ -475,6 +499,7 @@ class TranslationDataset(TsvDataset):
                  src_padding: Callable = None,
                  trg_padding: Callable = None, **kwargs):
         self.task = task
+        assert task == "MT"
 
         src_lang, trg_lang = exts
         self.has_trg = False if trg_lang is None else True
@@ -506,13 +531,14 @@ class TranslationDataset(TsvDataset):
             self.offsets['trg'] = _read_offsets(self.file_path['trg'])
             assert len(self.offsets['src']) == len(self.offsets['trg'])
 
-        # preprocessing
-        self.max_len = {'src': src_max_length, 'trg': trg_max_length}
+        # filer by length
+        self.max_len = {'src': src_max_length if self.is_train else -1,
+                        'trg': trg_max_length if self.is_train else -1}
 
         # padding func: will be assigned after vocab is built
         self.padding = {'src': src_padding, 'trg': trg_padding}
 
-        # file io objects
+        # file IO objects
         self.file_objects = {'src': open(
             self.file_path['src'], "r", encoding="utf-8")}
         if self.has_trg:
@@ -526,6 +552,13 @@ class TranslationDataset(TsvDataset):
         self.specaugment = None
         self.cmvn = None
 
+        # no random subset sampling for text
+        self.random_subset = -1 #kwargs.get("random_subset", -1)
+        #TODO: implement subsampling from self.offsets lists
+
+    def sample_random_subset(self, seed: int = 42) -> None:
+        raise NotImplementedError
+
     def get_item(self, idx: int, side: str, sample: bool = False,
                  filter_by_length: bool = False) -> List[str]:
         self.file_objects[side].seek(self.offsets[side][idx]) # seek line break
@@ -536,13 +569,17 @@ class TranslationDataset(TsvDataset):
         return item
 
     def get_raw_texts(self) -> Tuple[List[str], List[str]]:
+        """get non-tokenized string sentence pairs"""
         if len(self.offsets['src']) > 1000000:
             logger.warning("This might raise a memory error.")
 
-        src_list = [self.tokenizer['src'].pre_process(x) for x
-                    in read_list_from_file(self.file_path['src'])]
-        trg_list = [self.tokenizer['trg'].pre_process(x) for x
-                    in read_list_from_file(self.file_path['trg'])] if self.has_trg else []
+        if self.tokenizer['src'] is not None:
+            src_list = [self.tokenizer['src'].pre_process(x) for x
+                        in read_list_from_file(self.file_path['src'])]
+        if self.tokenizer['trg'] is not None:
+            trg_list = [self.tokenizer['trg'].pre_process(x) for x
+                        in read_list_from_file(self.file_path['trg'])] \
+                if self.has_trg else []
         return src_list, trg_list
 
     def open_file(self) -> None:
@@ -568,10 +605,11 @@ class TranslationDataset(TsvDataset):
             len(self.offsets['trg']) if self.has_trg else 0, self.is_train,
             self.max_len['src'], self.max_len['trg'])
 
+
 class MonoDataset(Dataset):
     """
-    MonoDataset which stores raw input sentences.
-    used for stream data.
+    MonoDataset which loads stream inputs.
+    - called by `translate()` func in `prediction.py`.
 
     :param task:
     :param src_tokenizer: tokenizer for src
@@ -580,14 +618,15 @@ class MonoDataset(Dataset):
     def __init__(self, task: str = "MT", src_tokenizer: BasicTokenizer = None,
                  src_padding: Callable = None):
         self.task = task
+        assert task in ["MT", "s2t"]
+        self.is_train = False
         self.has_trg = False
 
         # tokenizer
         self.tokenizer = {'src': src_tokenizer}
 
-        # preprocessing
-        self.max_len = -1
-        self.is_train = False
+        # filter by length
+        self.max_len = {'src': -1} # no cut-off
 
         # padding func: will be assigned after vocab is built
         self.padding = {'src': src_padding}
@@ -595,19 +634,35 @@ class MonoDataset(Dataset):
         # place holder
         self.cache = {}
 
-    def set_item(self, line: str):
+    def set_item(self, line: str) -> None:
+        """
+        - for MT task: takes sentence string (i.e. `this is a test.`)
+            no need to be pre-tokenized.
+            tokenizer specified in config will be applied in this func.
+        - for s2t task: takes audio file name (i.e. `commonvoice_en_10000.mp3`)
+            this audio file must be located under `root_path` in config!
+
+        :param line: (str)
+        """
         idx = len(self.cache)
-        item = self.tokenizer['src'](line, sample=False)
-        self.cache[idx] = item
+        if self.task == "MT":
+            item = self.tokenizer['src'](line, sample=False)
+        elif self.task == "s2t":
+            assert Path(line).is_file()
+            item = SpeechInstance(fbank_path=line, n_frames=None, idx=idx)
+        self.cache[idx] = (item, None)
 
     def cache_item_pair(self, idx: int) -> int:
-        assert idx in self.cache
-        return len(self.cache[idx]), 0
-
-    def __getitem__(self, idx: int) -> Tuple[List[str], Optional[List[str]]]:
         # pass through
         assert idx in self.cache
-        return self.cache[idx], None
+        return len(self.cache[idx][0]), 0
+
+    def __len__(self) -> int:
+        return len(self.cache)
+
+    def __repr__(self) -> str:
+        return "%s(task=%s, len(src)=%d, is_train=%r)" % (
+            self.__class__.__name__, self.task, len(self.cache), self.is_train)
 
 
 class SentenceBatchSampler(BatchSampler):

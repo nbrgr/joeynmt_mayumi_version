@@ -3,6 +3,7 @@
 This modules holds methods for generating predictions from a model.
 """
 from collections import defaultdict
+from functools import partial
 import logging
 from pathlib import Path
 import sys
@@ -17,11 +18,12 @@ from joeynmt.data import TranslationDataset, TsvDataset, load_data, make_data_it
 from joeynmt.helpers import bpe_postprocess, expand_reverse_index, \
     load_checkpoint, load_config, make_logger, read_list_from_file, \
     resolve_ckpt_path, store_attention_plots, write_list_to_file
+from joeynmt.helpers_for_audio import pad_features
 from joeynmt.metrics import bleu, chrf, sequence_accuracy, token_accuracy, wer
 from joeynmt.model import Model, _DataParallel, build_model
 from joeynmt.search import run_batch
-from joeynmt.tokenizers import EvaluationTokenizer
-from joeynmt.vocabulary import Vocabulary
+from joeynmt.tokenizers import EvaluationTokenizer, build_tokenizer
+from joeynmt.vocabulary import build_vocab
 
 logger = logging.getLogger(__name__)
 
@@ -118,27 +120,26 @@ def validate_on_data(model: Model,
             if n_gpu > 1:
                 batch_loss = batch_loss.sum() # sum on multi-gpu
                 n_correct = n_correct.float().sum()
-            total_loss += batch_loss.item()
+            total_loss += batch_loss.item() / batch.normalizer
             total_ntokens += batch.ntokens
             total_nseqs += batch.nseqs
             total_n_correct += n_correct.item()
-            logger.debug(f'{batch}, batch_loss: {batch_loss}, n_correct: {n_correct}')
 
         # run as during inference to produce translations
         output, attention_scores = run_batch(
             model=model, batch=batch, beam_size=beam_size,
             beam_alpha=beam_alpha, max_output_length=max_output_length,
             n_best=n_best)
-        logger.debug(f'output: {output}')
+
         # sort outputs back to original order
         all_outputs.extend(output[sort_reverse_index])
         valid_attention_scores.extend(attention_scores[sort_reverse_index]
                                       if attention_scores is not None else [])
     assert len(all_outputs) == len(data) * n_best
-    logger.debug(all_outputs[:10])
+
     if compute_loss and total_ntokens > 0:
         # total validation loss
-        valid_scores['loss'] = total_loss / total_nseqs # normalize by nseqs
+        valid_scores['loss'] = total_loss # normalized
         # accuracy before decoding
         valid_scores['acc'] = total_n_correct / total_ntokens
         # exponent of token-level negative log prob
@@ -151,19 +152,19 @@ def validate_on_data(model: Model,
     # decode back to symbols
     decoded_valid = model.trg_vocab.arrays_to_sentences(arrays=all_outputs,
                                                         cut_at_eos=True)
-    logger.debug(decoded_valid[:10])
+
     # evaluate with metric on full dataset
     valid_sources, valid_references = data.get_raw_texts()
-    valid_hypotheses = [data.tokenizer['trg'].post_process(t)
+    valid_hypotheses = [data.tokenizer['trg'].post_process(t) # un-bpe-ing
                         for t in decoded_valid]
-    logger.debug(valid_hypotheses[:10])
+
     # if references are given, evaluate against them
     if valid_references:
         assert len(valid_hypotheses) == len(valid_references)
 
         for eval_metric in eval_metrics:
             if eval_metric.lower() == 'bleu':
-                # this version does not use any tokenization
+                # pass the untokenized string sequences (not the tokenized list)
                 valid_scores[eval_metric] = bleu(
                     valid_hypotheses,
                     valid_references,
@@ -201,9 +202,11 @@ def parse_test_args(cfg, mode="test"):
     :return:
     """
     train_cfg = cfg["training"]
-    if "test" not in cfg["data"].keys():
+    data_cfg = cfg["data"]
+    test_cfg = cfg["testing"]
+    if "test" not in data_cfg.keys():
         raise ValueError("Test data must be specified in config.")
-    task = cfg["data"].get("task", "MT")
+    task = data_cfg.get("task", "MT")
 
     batch_size = train_cfg.get("eval_batch_size", train_cfg.get("batch_size", 1))
     batch_type = train_cfg.get("eval_batch_type", train_cfg.get("batch_type", "sentence"))
@@ -211,7 +214,7 @@ def parse_test_args(cfg, mode="test"):
     device = torch.device("cuda" if use_cuda else "cpu")
     if mode == 'test':
         n_gpu = torch.cuda.device_count() if use_cuda else 0
-        #k = cfg["testing"].get("beam_size", 1)
+        #k = test_cfg.get("beam_size", 1)
         #batch_per_device = batch_size*k // n_gpu if n_gpu > 1 else batch_size*k
         batch_per_device = batch_size // n_gpu if n_gpu > 1 else batch_size
         logger.info("Process device: %s, n_gpu: %d, batch_size per device: %d",
@@ -231,21 +234,21 @@ def parse_test_args(cfg, mode="test"):
 
     # whether to use beam search for decoding, 0: greedy decoding
     if "testing" in cfg.keys():
-        beam_size = cfg["testing"].get("beam_size", 1) # positive integer only
-        beam_alpha = cfg["testing"].get("alpha", -1)
+        beam_size = test_cfg.get("beam_size", 1) # positive integer only
+        beam_alpha = test_cfg.get("alpha", -1)
         sacrebleu = {"remove_whitespace": True, "tokenize": "13a"}
-        if "sacrebleu" in cfg["testing"].keys():
-            sacrebleu["remove_whitespace"] = cfg["testing"]["sacrebleu"] \
+        if "sacrebleu" in test_cfg.keys():
+            sacrebleu["remove_whitespace"] = test_cfg["sacrebleu"] \
                 .get("remove_whitespace", True)
-            sacrebleu["tokenize"] = cfg["testing"]["sacrebleu"] \
+            sacrebleu["tokenize"] = test_cfg["sacrebleu"] \
                 .get("tokenize", "13a")
         if "wer" in eval_metrics:
             eval_tokenizer = EvaluationTokenizer(
                 tokenize=sacrebleu["tokenize"],
-                lowercase=cfg["data"].get("lowercase", False),
-                remove_punctuation=cfg["testing"]["sacrebleu"] \
+                lowercase=data_cfg["trg"].get("lowercase", False),
+                remove_punctuation=test_cfg["sacrebleu"] \
                     .get("remove_punctuation", False),
-                level="char" if cfg["data"]["level"] == "char" else "word")
+                level="char" if data_cfg["trg"]["level"] == "char" else "word")
             logger.info(eval_tokenizer)
             sacrebleu["tok_fun"] = eval_tokenizer
 
@@ -297,14 +300,14 @@ def test(cfg_file,
     if datasets is None:
         # set default vocab path
         trg_vocab_file = model_dir / "trg_vocab.txt"
-        if "trg_vocab" not in cfg["data"]:
+        if "voc_file" not in cfg["data"]["trg"]:
             assert trg_vocab_file.isfile(), f"{trg_vocab_file} not found."
-            cfg["data"]["trg_vocab"] = trg_vocab_file
+            cfg["data"]["trg"]["voc_file"] = trg_vocab_file
         if task == "MT":
             src_vocab_file = model_dir / "src_vocab.txt"
-            if "src_vocab" not in cfg["data"]:
+            if "voc_file" not in cfg["data"]["src"]:
                 assert src_vocab_file.isfile(), f"{src_vocab_file} not found."
-                cfg["data"]["src_vocab"] = src_vocab_file
+                cfg["data"]["src"]["voc_file"] = src_vocab_file
         # load data
         src_vocab, trg_vocab, _, dev_data, test_data = load_data(
             data_cfg=cfg["data"], datasets=["dev", "test"])
@@ -351,9 +354,10 @@ def test(cfg_file,
             continue
 
         if task == "MT":
-            dataset_file = f'{cfg["data"][data_set_name]}.{cfg["data"]["src"]}'
+            dataset_file = f'{cfg["data"][data_set_name]}.{cfg["data"]["src"]["lang"]}'
         elif task == "s2t":
-            dataset_file = f'{Path(cfg["data"]["root_path"])/cfg["data"][data_set_name]}.tsv'
+            root_path = Path(cfg["data"]["root_path"])
+            dataset_file = f'{root_path / cfg["data"][data_set_name]}.tsv'
         logger.info("Decoding on %s set (%s)...", data_set_name, dataset_file)
         if isinstance(data_set, TranslationDataset):
             data_set.open_file()
@@ -435,8 +439,9 @@ def translate(cfg_file: str,
         return hypotheses
 
     cfg = load_config(Path(cfg_file))
+    data_cfg = cfg["data"]
     model_dir = Path(cfg["training"]["model_dir"])
-    task = cfg["data"].get("task", "MT")
+    task = data_cfg.get("task", "MT")
 
     _ = make_logger(model_dir, mode="translate")
     # version string returned
@@ -446,13 +451,17 @@ def translate(cfg_file: str,
                              model_dir)
 
     # read vocabs
-    trg_tokens = read_list_from_file(
-        Path(cfg["data"].get("trg_vocab", model_dir / "trg_vocab.txt")))
-    trg_vocab = Vocabulary(trg_tokens)
     if task == "MT":
-        src_tokens = read_list_from_file(
-            Path(cfg["data"].get("src_vocab", model_dir / "src_vocab.txt")))
-        src_vocab = Vocabulary(src_tokens)
+        src_vocab_file = model_dir / "src_vocab.txt"
+        src_vocab = build_vocab(
+            min_freq=data_cfg["src"].get("voc_min_freq", 1),
+            max_size=data_cfg["src"].get("voc_limit", sys.maxsize),
+            vocab_file=Path(data_cfg["src"].get("voc_file", src_vocab_file)))
+    trg_vocab_file = model_dir / "trg_vocab.txt"
+    trg_vocab = build_vocab(
+        min_freq=data_cfg["trg"].get("voc_min_freq", 1),
+        max_size=data_cfg["trg"].get("voc_limit", sys.maxsize),
+        vocab_file=Path(data_cfg["trg"].get("voc_file", trg_vocab_file)))
 
     # parse test args
     batch_size, batch_type, device, n_gpu, eval_metrics, max_output_length, \
@@ -469,10 +478,17 @@ def translate(cfg_file: str,
     if device.type == "cuda":
         model.to(device)
 
-    src_tokenizer = Tokenizer(src_vocab, **cfg["data"]["spm_src"])
-    test_data = MonoDataset(lowercase=cfg["data"]["lowercase"],
-                            src_tokenizer=src_tokenizer,
-                            src_padding=src_vocab.sentences_to_ids)
+    if task == "MT":
+        src_tokenizer = build_tokenizer(data_cfg, "src")
+        src_padding = partial(src_vocab.sentences_to_ids, bos=False, eos=True)
+    elif task == "s2t":
+        src_tokenizer = None
+        src_padding = partial(pad_features,
+                              root_path=Path(data_cfg["root_path"]),
+                              embed_size=data_cfg["src"]["num_freq"],
+                              pad_index=trg_vocab.pad_index) # no src_vocab
+    test_data = MonoDataset(task=task, src_tokenizer=src_tokenizer,
+                            src_padding=src_padding)
 
     if not sys.stdin.isatty():
         # input stream given
@@ -512,13 +528,14 @@ def translate(cfg_file: str,
         batch_type = "sentence"
         while True:
             try:
-                src_input = input("\nPlease enter a source sentence "
-                                  "(pre-processed): \n")
+                prompt_str = "a source sentence" if task == "MT" else \
+                    "audio file name (relative to `root_path` in config)"
+                src_input = input(f"\nPlease enter {prompt_str}:\n")
                 if not src_input.strip():
                     break
 
                 # every line has to be made into dataset
-                test_data.set_item(src_input)
+                test_data.set_item(src_input.rstrip())
                 hypotheses = _translate_data(test_data)
 
                 print("JoeyNMT: Hypotheses ranked by score")
