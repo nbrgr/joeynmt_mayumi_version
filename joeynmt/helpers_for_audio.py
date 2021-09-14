@@ -165,7 +165,10 @@ def pad_features(feat_list: List[SpeechInstance], root_path: Path,
       - features np.ndarray, (batch_size, src_len, embed_size)
       - lengths List[int], (batch_size)
     """
-    max_len = max([len(f) for f in feat_list])
+    max_len = max([len(f) for f in feat_list] + [10])
+    #TODO: minimum length = 10. Since 1d-Conv raise an error if the input length
+    # is less than the kernel size. here hard-coded, but it should be handled
+    # with the kernel-size specification in config file!
     batch_size = len(feat_list)
 
     # encoder input has shape of (batch_size, src_len, embed_size)

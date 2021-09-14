@@ -1,22 +1,22 @@
-name: "mustc-v2-ende-mt"
+name: "mustc-v1-ende-mt"
 joeynmt_version: 1.4
 
 data:
     task: "MT"
-    train: "/scratch5t/ohta/MUSTC_v2.0/en-de/train"
-    dev: "/scratch5t/ohta/MUSTC_v2.0/en-de/tst-HE"
-    test: "/scratch5t/ohta/MUSTC_v2.0/en-de/tst-COMMON"
+    train: "/scratch5t/ohta/MUSTC_v1.0/en-de/train"
+    dev: "/scratch5t/ohta/MUSTC_v1.0/en-de/tst-HE"
+    test: "/scratch5t/ohta/MUSTC_v1.0/en-de/tst-COMMON"
     src:
         lang: "en"                      # src text language
         level: "bpe"                    # segmentation level: either "word", "bpe" or "char"
         tokenizer: "sentencepiece"      # tokenizer type: either "subword-nmt" or "sentencepiece" (default: subword-nmt; used in postprocess during evaluation)
-        lowercase: False                # lowercase the src text, also for validation
+        lowercase: True                 # lowercase the src text, also for validation
         max_length: 120                 # filter out longer sentences from training (trg)
         voc_min_freq: 1                 # src minimum frequency for a token to become part of the vocabulary
-        voc_limit: 20000                # src vocabulary only includes this many most frequent tokens, default: unlimited
-        voc_file: "/scratch5t/ohta/MUSTC_v2.0/en-de/spm_unigram20000.tsv"   # if specified, load a vocabulary from this file
+        voc_limit: 7000                 # src vocabulary only includes this many most frequent tokens, default: unlimited
+        voc_file: "/scratch5t/ohta/MUSTC_v1.0/en-de/spm_bpe7000.tsv"   # if specified, load a vocabulary from this file
         spm:                            # sentence piece options
-            model_file: "/scratch5t/ohta/MUSTC_v2.0/en-de/spm_unigram20000.model"  # sentence piece model path
+            model_file: "/scratch5t/ohta/MUSTC_v1.0/en-de/spm_bpe7000.model"  # sentence piece model path
             enable_sampling: True       # whether to enable BPE dropout
     trg:
         lang: "de"                      # trg text language
@@ -25,18 +25,18 @@ data:
         lowercase: False                # lowercase the trg text, also for validation
         max_length: 120                 # filter out longer sentences from training (trg)
         voc_min_freq: 1                 # trg minimum frequency for a token to become part of the vocabulary
-        voc_limit: 20000                # trg vocabulary only includes this many most frequent tokens, default: unlimited
-        voc_file: "/scratch5t/ohta/MUSTC_v2.0/en-de/spm_unigram20000.tsv"   # if specified, load a vocabulary from this file
+        voc_limit: 7000                 # trg vocabulary only includes this many most frequent tokens, default: unlimited
+        voc_file: "/scratch5t/ohta/MUSTC_v1.0/en-de/spm_bpe7000.tsv"   # if specified, load a vocabulary from this file
         spm:                            # sentence piece options
-            model_file: "/scratch5t/ohta/MUSTC_v2.0/en-de/spm_unigram20000.model"  # sentence piece model path
+            model_file: "/scratch5t/ohta/MUSTC_v1.0/en-de/spm_bpe7000.model"  # sentence piece model path
             enable_sampling: True       # whether to enable BPE dropout
 
 testing:
-    beam_size: 10
+    beam_size: 6
     alpha: 1.0
     sacrebleu:
         remove_whitespace: False
-        tokenize: "13a"
+        tokenize: "intl"
 
 training:
     #load_model: "/scratch/ohta/models/mustc_mt_seed123/best.ckpt"
@@ -44,7 +44,7 @@ training:
     reset_scheduler: False
     reset_optimizer: False
     reset_iter_state: False
-    random_seed: 123
+    random_seed: 456
     optimizer: "adam"
     adam_betas: [0.9, 0.99]
     loss: "crossentropy"
@@ -65,7 +65,7 @@ training:
     validation_freq: 1000
     logging_freq: 100
     eval_metrics: "bleu"
-    model_dir: "/scratch/ohta/models/mustc_mt_seed123"
+    model_dir: "/scratch/ohta/models/mustc_v1_mt_seed456"
     overwrite: False
     shuffle: True
     use_cuda: True

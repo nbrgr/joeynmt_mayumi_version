@@ -46,7 +46,7 @@ def make_model_dir(model_dir: Path, overwrite: bool = False) -> Path:
     if model_dir.is_dir():
         if not overwrite:
             raise FileExistsError(
-                "Model directory exists and overwriting is disabled.")
+                f"Model directory {model_dir} exists and overwriting is disabled.")
         # delete previous directory to start with empty dir again
         shutil.rmtree(model_dir)
     model_dir.mkdir()

@@ -73,7 +73,9 @@ def load_data(data_cfg: dict, datasets: list = None) \
         raise ValueError('Please specify at least one data source path.')
 
     _max_sent_length = data_cfg.get("max_sent_length", -1) # backward compatibility
+    src_min_length = src_cfg.get("min_length", -1)
     src_max_length = src_cfg.get("max_length", _max_sent_length)
+    trg_min_length = trg_cfg.get("min_length", -1)
     trg_max_length = trg_cfg.get("max_length", _max_sent_length)
     if task == "s2t":
         num_freq = src_cfg.get("num_freq", 80) # frequency dimension
@@ -96,7 +98,9 @@ def load_data(data_cfg: dict, datasets: list = None) \
         if task == "s2t":
             train_data = TsvDataset(path=(Path(root_path)/train_path),
                                     task=task,
+                                    src_min_length=src_min_length,
                                     src_max_length=src_max_length,
+                                    trg_min_length=trg_min_length,
                                     trg_max_length=trg_max_length,
                                     num_freq=num_freq,
                                     is_train=True, **kwargs)
@@ -104,7 +108,9 @@ def load_data(data_cfg: dict, datasets: list = None) \
             train_data = TranslationDataset(path=Path(train_path),
                                             exts=(src_lang, trg_lang),
                                             task=task,
+                                            src_min_length=src_min_length,
                                             src_max_length=src_max_length,
+                                            trg_min_length=trg_min_length,
                                             trg_max_length=trg_max_length,
                                             is_train=True, **kwargs)
 
@@ -174,8 +180,6 @@ def load_data(data_cfg: dict, datasets: list = None) \
         if task == "s2t":
             dev_data = TsvDataset(path=(Path(root_path)/dev_path),
                                   task=task,
-                                  src_max_length=src_max_length,
-                                  trg_max_length=trg_max_length,
                                   is_train=False,
                                   trg_tokenizer=tokenizer['trg'],
                                   src_padding=src_padding,
@@ -198,8 +202,6 @@ def load_data(data_cfg: dict, datasets: list = None) \
         if task == "s2t":
             test_data = TsvDataset(path=(Path(root_path)/test_path),
                                    task=task,
-                                   src_max_length=src_max_length,
-                                   trg_max_length=trg_max_length,
                                    is_train=False,
                                    trg_tokenizer=tokenizer['trg'],
                                    src_padding=src_padding,
@@ -362,7 +364,9 @@ class TsvDataset(Dataset):
     def __init__(self, path: Path,
                  exts: str = None, # not used
                  task: str = "s2t",
+                 src_min_length: int = -1,
                  src_max_length: int = -1,
+                 trg_min_length: int = -1,
                  trg_max_length: int = -1,
                  is_train: bool = False,
                  src_tokenizer: BasicTokenizer = None, # not used
@@ -395,6 +399,8 @@ class TsvDataset(Dataset):
         # filter by length
         self.max_len = {'src': src_max_length if is_train else -1,
                         'trg': trg_max_length if is_train else -1}
+        self.min_len = {'src': src_min_length if is_train else -1,
+                        'trg': trg_min_length if is_train else -1}
 
         # data augmentation
         self.specaugment = kwargs.get("specaugment", None) if self.is_train else None
@@ -465,10 +471,11 @@ class TsvDataset(Dataset):
 
     def __repr__(self) -> str:
         return "%s(task=%s, len(src)=%d, len(trg)=%d, is_train=%r, " \
-               "random_subset=%d, src_max_length=%d, trg_max_length=%d, " \
-               "specaugment=%r, cmvn=%r)" % (self.__class__.__name__,
-            self.task, len(self.df), len(self.df), self.is_train,
-            self.random_subset, self.max_len['src'], self.max_len['trg'],
+               "random_subset=%d, filter_src_length=(%d,%d), " \
+               "filter_trg_length=(%d,%d), specaugment=%r, cmvn=%r)" % (
+            self.__class__.__name__, self.task, len(self.df), len(self.df),
+            self.is_train, self.random_subset, self.min_len['src'],
+            self.max_len['src'], self.min_len['trg'], self.max_len['trg'],
             self.specaugment is not None, self.cmvn is not None)
 
 
@@ -480,7 +487,9 @@ class TranslationDataset(TsvDataset):
     :param path: file name (w/o ext)
     :param exts: file ext (language code pair)
     :param task: "MT" or "s2t"
+    :param src_min_length: min length of src instance
     :param src_max_length: max length of src instance
+    :param trg_min_length: min length of trg instance
     :param trg_max_length: max length of trg instance
     :param is_train: bool indicator for train set or not
     :param src_tokenizer: tokenizer for src
@@ -491,7 +500,9 @@ class TranslationDataset(TsvDataset):
     def __init__(self, path: Path,
                  exts: Tuple[str, Union[str, None]],
                  task: str = "MT",
+                 src_min_length: int = -1,
                  src_max_length: int = -1,
+                 trg_min_length: int = -1,
                  trg_max_length: int = -1,
                  is_train: bool = False,
                  src_tokenizer: BasicTokenizer = None,
@@ -534,6 +545,8 @@ class TranslationDataset(TsvDataset):
         # filer by length
         self.max_len = {'src': src_max_length if self.is_train else -1,
                         'trg': trg_max_length if self.is_train else -1}
+        self.min_len = {'src': src_min_length if self.is_train else -1,
+                        'trg': trg_min_length if self.is_train else -1}
 
         # padding func: will be assigned after vocab is built
         self.padding = {'src': src_padding, 'trg': trg_padding}
@@ -564,7 +577,8 @@ class TranslationDataset(TsvDataset):
         self.file_objects[side].seek(self.offsets[side][idx]) # seek line break
         line = self.file_objects[side].readline().rstrip('\n')
         item = self.tokenizer[side](line, sample=sample)
-        if filter_by_length and len(item) > self.max_len[side]:
+        if filter_by_length and (len(item) > self.max_len[side]
+                                 or len(item) < self.min_len[side]):
             item = None
         return item
 
@@ -600,10 +614,11 @@ class TranslationDataset(TsvDataset):
 
     def __repr__(self) -> str:
         return "%s(task=%s, len(src)=%d, len(trg)=%d, is_train=%r, " \
-               "src_max_length=%d, trg_max_length=%d)" % (
+               "filter_src_length=(%d,%d), filter_trg_length=(%d,%d))" % (
             self.__class__.__name__, self.task, len(self.offsets['src']),
             len(self.offsets['trg']) if self.has_trg else 0, self.is_train,
-            self.max_len['src'], self.max_len['trg'])
+            self.min_len['src'], self.max_len['src'],
+            self.min_len['trg'], self.max_len['trg'])
 
 
 class MonoDataset(Dataset):
@@ -627,6 +642,7 @@ class MonoDataset(Dataset):
 
         # filter by length
         self.max_len = {'src': -1} # no cut-off
+        self.min_len = {'src': -1}
 
         # padding func: will be assigned after vocab is built
         self.padding = {'src': src_padding}

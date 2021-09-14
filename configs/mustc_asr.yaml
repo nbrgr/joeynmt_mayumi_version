@@ -1,25 +1,25 @@
-name: "mustc-v2-en-asr"
+name: "mustc-v1-en-asr"
 joeynmt_version: 1.4
 
 data:
     task: "s2t"
-    root_path: "/scratch5t/ohta/MUSTC_v2.0/en-de/"
+    root_path: "/scratch5t/ohta/MUSTC_v1.0/en-de/"
     train: "train_asr"
     dev: "dev_asr"
     test: "tst-COMMON_asr"
     src:
         num_freq: 80
-        max_length: 3000
+        max_length: 5000
     trg:
         level: "bpe"
         lowercase: True
         tokenizer: "sentencepiece"
         max_length: 80
         voc_min_freq: 1
-        voc_limit: 20000
-        voc_file: "/scratch5t/ohta/MUSTC_v2.0/en-de/spm_unigram20000.tsv"
+        voc_limit: 7000
+        voc_file: "/scratch5t/ohta/MUSTC_v1.0/en-de/spm_bpe7000.tsv"
         spm:
-            model_file: "/scratch5t/ohta/MUSTC_v2.0/en-de/spm_unigram20000.model"
+            model_file: "/scratch5t/ohta/MUSTC_v1.0/en-de/spm_bpe7000.model"
             enable_sampling: False # whether to enable BPE dropout
     specaugment:
         freq_mask_n: 2
@@ -37,10 +37,10 @@ testing:
     alpha: 1.0
     sacrebleu:
         remove_whitespace: True
-        tokenize: "13a"
+        tokenize: "intl"
 
 training:
-    #load_model: "/scratch/ohta/models/mustc_asr_seed123/best.ckpt"
+    #load_model: "/scratch12t/ohta/models/mustc_v1_asr_seed456/latest.ckpt"
     reset_best_ckpt: False
     reset_scheduler: False
     reset_optimizer: False
@@ -67,8 +67,8 @@ training:
     validation_freq: 1000
     logging_freq: 100
     eval_metrics: "wer"
-    model_dir: "/scratch12t/ohta/models/mustc_v2_asr_seed789"
-    overwrite: True
+    model_dir: "/scratch12t/ohta/models/mustc_v1_asr_seed789"
+    overwrite: False
     shuffle: True
     use_cuda: True
     fp16: False
