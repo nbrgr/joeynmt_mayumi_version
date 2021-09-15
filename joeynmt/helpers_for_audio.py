@@ -88,10 +88,10 @@ def extract_fbank_features(waveform: torch.FloatTensor,
 
     try:
         features = _get_torchaudio_fbank(_waveform, sample_rate, n_mel_bins)
-        assert abs(features.shape[0] - n_frames) <= 1, features.shape
+        assert abs(features.shape[0] - n_frames) <= 1, (n_frames, features.shape)
     except Exception as e:
         raise ValueError(f"torchaudio faild to extract mel filterbank features "
-                         f"at {utt_id}. {e}")
+                         f"at utt_id: {utt_id}. {e}")
 
     if output_path is not None:
         np.save(output_path.as_posix(), features)

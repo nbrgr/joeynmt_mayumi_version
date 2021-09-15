@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Union
 
 import numpy as np
+import pandas as pd
 
 from joeynmt.constants import BOS_ID, BOS_TOKEN, EOS_ID, EOS_TOKEN, PAD_ID, \
     PAD_TOKEN, UNK_ID, UNK_TOKEN
@@ -199,11 +200,11 @@ def build_vocab(max_size: int, min_freq: int, tokens: List[List[str]] = None,
     if vocab_file is not None:
         # load it from file
         if vocab_file.suffix == ".tsv":
-            tokens = {}
-            for line in read_list_from_file(vocab_file):
-                surface, freq = line.split("\t")
-                tokens[surface] = int(freq)
-
+            df = pd.read_csv(vocab_file, sep="\t", encoding="utf8",
+                             keep_default_na=False, index_col=None,
+                             header=None, names=['surface', 'count'],
+                             dtype={'surface': str, 'count': int})
+            tokens = dict(zip(df['surface'].to_list(), df['count'].to_list()))
             unique_tokens = sort_and_cut(Counter(tokens), max_size, min_freq)
         else:
             unique_tokens = read_list_from_file(vocab_file)

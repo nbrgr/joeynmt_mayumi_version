@@ -158,20 +158,19 @@ class CoVoST2(Dataset):
             self.df = df[df["split"] == split]
 
         # check validity
-        self.df = self._drop_invalid(df=self.df, mp3_path=(self.root / "clips"))
+        self._drop_invalid(mp3_path=(self.root / "clips"))
 
         # whether to call torchaudio.load()
         self.return_wav = return_wav
 
-    def _drop_invalid(self, df: pd.DataFrame, mp3_path: Path) -> pd.DataFrame:
+    def _drop_invalid(self, mp3_path: Path) -> None:
         """check AudioMetaData"""
         func = partial(_check_audio_meta, root=mp3_path)
-        df = _parallel_df_apply(df, func, n_cores=N_WORKERS)
-        for idx, row in df[df['num_frames'].isna()].iterrows():
+        self.df = _parallel_df_apply(self.df, func, n_cores=N_WORKERS)
+        for idx, row in self.df[self.df['num_frames'].isna()].iterrows():
             print(f'Skip {idx}-th instance in {mp3_path / row["path"]}.')
-        df.dropna(subset=['num_frames'], inplace=True)
-        df.reset_index(drop=True, inplace=True)
-        return df
+        self.df.dropna(subset=['num_frames'], inplace=True)
+        self.df.reset_index(drop=True, inplace=True)
 
     def __getitem__(self, n: int) -> Tuple[Tensor, int, int, str, str, str, str]:
         """Load the n-th sample from the dataset.
@@ -208,7 +207,7 @@ class Tatoeba(CoVoST2):
     LANG_CODE_2_TO_3 = {
         'fr': 'fra', 'de': 'deu', 'nl': 'nld', 'ru': 'rus', 'en': 'eng', 'es': 'spa'
     }
-    def __init__(self, root: Path, src_lang: str, trg_lang: str):
+    def __init__(self, root: Path, src_lang: str, trg_lang: str, split: str):
         assert src_lang is not None
         self.has_translation = trg_lang is not None # False -> asr; True -> ast
 
@@ -228,26 +227,34 @@ class Tatoeba(CoVoST2):
                 cv_tsv_path = self.root / tsv_path
                 break
         assert cv_tsv_path.is_file()
-        df = load_tsv(cv_tsv_path).rename(
+        self.df = load_tsv(cv_tsv_path).rename(
             columns={"en_sentence": "translation", "speaker": "client_id"})
-        df["split"] = "tatoeba"
-        df["path"] = df["id"].apply(lambda x: f"{x}.mp3")
+        self.df["split"] = split #"tatoeba"
+        self.df["path"] = self.df["id"].apply(lambda x: f"{x}.mp3")
         #save_tsv(df, self.root / cv_tsv_path.name)
-        (self.root / "clips").mkdir(exist_ok=True)
+
+        # download mp3
+        mp3_path = self.root / "clips"
+        mp3_path.mkdir(exist_ok=True)
+        self._download_mp3(lang=src_lang, mp3_path=mp3_path, overwrite=False)
 
         # check validity
-        self._drop_invalid()
+        self._drop_invalid(mp3_path=mp3_path)
 
         # whether to call torchaudio.load()
         self.return_wav = True
 
-    def _download_mp3(self, lang: str, s_id: str):
+    def _download_mp3(self, lang: str, mp3_path: Path, overwrite: bool = False):
         lang_3 = self.LANG_CODE_2_TO_3[lang]
-        url = f'https://audio.tatoeba.org/sentences/{lang_3}/{s_id}.mp3'
-        try:
-            urllib.request.urlretrieve(url, (self.root / f'clips/{s_id}.mp3'))
-        except Exception as e:
-            raise Exception(e)
+        for name, row in tqdm(self.df.iterrows(), total=len(self.df)):
+            s_id = row['id']
+            if overwrite or not (mp3_path / f'{s_id}.mp3').is_file():
+                url = f'https://audio.tatoeba.org/sentences/{lang_3}/{s_id}.mp3'
+                try:
+                    urllib.request.urlretrieve(url, (mp3_path / f'{s_id}.mp3'))
+                except Exception as e:
+                    #raise Exception(e)
+                    continue
 
 
 def process(data_root, src_lang, trg_lang):

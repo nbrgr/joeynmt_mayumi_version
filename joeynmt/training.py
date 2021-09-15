@@ -277,11 +277,10 @@ class TrainManager:
             assert best_path.resolve().stem == str(self.stats.best_ckpt_iter)
 
         # push to and pop from the heap queue
-        if not math.isnan(score):
-            if self.num_ckpts > 0:
-                to_delete = None
-                if len(self.ckpt_queue) < self.num_ckpts:   # no pop, push only
-                    heapq.heappush(self.ckpt_queue, (score, model_path))
+        to_delete = None
+        if not math.isnan(score) and self.num_ckpts > 0:
+            if len(self.ckpt_queue) < self.num_ckpts:   # no pop, push only
+                heapq.heappush(self.ckpt_queue, (score, model_path))
             else:   # push + pop the worst one in the queue
                 if self.minimize_metric:
                     # pylint: disable=protected-access
