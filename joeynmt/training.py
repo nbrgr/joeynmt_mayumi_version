@@ -589,10 +589,6 @@ class TrainManager:
             denominator = batch.ntokens if l == 'acc' else batch.normalizer
             losses[l] = losses[l] / denominator
 
-        #if self.n_gpu > 1:
-        #    norm_batch_loss = norm_batch_loss / self.n_gpu
-        #    correct_tokens = correct_tokens / self.n_gpu
-
         if self.batch_multiplier > 1:
             for l in losses.keys():
                 losses[l] = losses[l] / self.batch_multiplier
@@ -630,10 +626,11 @@ class TrainManager:
             normalization=self.normalization
         )
 
-        for eval_metric in ['loss', 'ppl', 'acc'] + self.eval_metrics:
-            self.tb_writer.add_scalar(
-                f"valid/{eval_metric}", valid_scores[eval_metric],
-                self.stats.steps)
+        #for eval_metric in ['loss', 'ppl', 'acc'] + self.eval_metrics:
+        for eval_metric, score in valid_scores.items():
+            if not math.isnan(score):
+                self.tb_writer.add_scalar(
+                    f"valid/{eval_metric}", score, self.stats.steps)
 
         ckpt_score = valid_scores[self.early_stopping_metric_name]
 

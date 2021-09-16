@@ -54,7 +54,7 @@ class Batch:
             # we exclude the padded areas (and blank areas)
             # from the loss computation
             self.trg_mask = (self.trg != pad_index).unsqueeze(1)
-            self.ntokens = (self.trg != pad_index).data.sum().item()
+            self.ntokens = (self.trg != pad_index).data.sum().item() # int
 
         self.normalizer = 1 if normalization == "none" \
                             else self.ntokens if normalization == "tokens" \

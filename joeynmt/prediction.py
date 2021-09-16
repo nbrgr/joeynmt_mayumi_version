@@ -99,9 +99,9 @@ def validate_on_data(model: Model,
     valid_scores = defaultdict(float)
     all_outputs = []
     valid_attention_scores = []
-    total_loss = 0
+    total_loss = defaultdict(float)
+    total_normalizer = 0
     total_ntokens = 0
-    total_nseqs = 0
     total_n_correct = 0
     for batch in valid_iter:
         if batch.nseqs < 1:
@@ -119,10 +119,16 @@ def validate_on_data(model: Model,
                     return_type="loss", **vars(batch))
             if n_gpu > 1:
                 batch_loss = batch_loss.sum() # sum on multi-gpu
+                nll_loss = nll_loss.sum()
+                ctc_loss = ctc_loss.sum()
                 n_correct = n_correct.float().sum()
-            total_loss += batch_loss.item() / batch.normalizer
+            total_loss['loss'] += batch_loss.item() # float
+            if torch.is_tensor(nll_loss): # nll_loss is not None
+                total_loss['nll_loss'] += nll_loss.item()
+            if torch.is_tensor(ctc_loss): # ctc_loss is not None
+                total_loss['ctc_loss'] += ctc_loss.item()
+            total_normalizer += 0 if batch.normalizer == 1 else batch.normalizer
             total_ntokens += batch.ntokens
-            total_nseqs += batch.nseqs
             total_n_correct += n_correct.item()
 
         # run as during inference to produce translations
@@ -138,16 +144,18 @@ def validate_on_data(model: Model,
     assert len(all_outputs) == len(data) * n_best
 
     if compute_loss and total_ntokens > 0:
-        # total validation loss
-        valid_scores['loss'] = total_loss # normalized
+        total_normalizer = 1 if total_normalizer == 0 else total_normalizer
+        valid_scores['loss'] = total_loss['loss'] / total_normalizer
+        valid_scores['nll_loss'] = total_loss['nll_loss'] / total_normalizer
+        valid_scores['ctc_loss'] = total_loss['ctc_loss'] / total_normalizer
         # accuracy before decoding
         valid_scores['acc'] = total_n_correct / total_ntokens
         # exponent of token-level negative log prob
-        valid_scores['ppl'] = np.exp(total_loss / total_ntokens)
+        valid_scores['ppl'] = np.exp(total_loss['loss'] / total_ntokens)
     else:
-        valid_scores['loss'] = -1
-        valid_scores['acc'] = -1
-        valid_scores['ppl'] = -1
+        valid_scores['loss'] = float('nan')
+        valid_scores['acc'] = float('nan')
+        valid_scores['ppl'] = float('nan')
 
     # decode back to symbols
     decoded_valid = model.trg_vocab.arrays_to_sentences(arrays=all_outputs,
