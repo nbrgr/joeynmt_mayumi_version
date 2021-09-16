@@ -115,8 +115,8 @@ def validate_on_data(model: Model,
         if compute_loss and batch.has_trg:
             # don't track gradients during validation
             with torch.no_grad():
-                batch_loss, _, _, n_correct = model(return_type="loss",
-                                                    **vars(batch))
+                batch_loss, nll_loss, ctc_loss, n_correct = model(
+                    return_type="loss", **vars(batch))
             if n_gpu > 1:
                 batch_loss = batch_loss.sum() # sum on multi-gpu
                 n_correct = n_correct.float().sum()
@@ -330,13 +330,6 @@ def test(cfg_file,
                              model_dir)
 
     model_checkpoint = load_checkpoint(ckpt, device=device)
-    # objective function: just for ctc decoding.
-    # in search.py, joeynmt accesses model class variables:
-    #       with_ctc = model.loss_function.require_ctc_layer
-    #       ctc_weight = model.loss_function.ctc_weight
-    model.loss_function = (cfg["training"].get("loss", "crossentropy"),
-                           cfg["training"].get("label_smoothing", 0.0),
-                           cfg["training"].get("ctc_weight", 0.3))
 
     # load model state from disk
     model.load_state_dict(model_checkpoint["model_state"])

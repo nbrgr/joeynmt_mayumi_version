@@ -77,7 +77,7 @@ def recurrent_greedy(src_mask: Tensor, max_output_length: int, model: Model,
         # decode one single step
         with torch.no_grad():
             logits, hidden, att_probs, prev_att_vector = model(
-                return_type="decode", # ctc_decoding not enabled
+                return_type="decode",
                 trg_input=prev_y,
                 encoder_output=encoder_output,
                 encoder_hidden=encoder_hidden,
@@ -126,10 +126,6 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
     bos_index = model.bos_index
     eos_index = model.eos_index
     batch_size = src_mask.size(0)
-    with_ctc = model.loss_function.require_ctc_layer \
-        if hasattr(model, 'loss_function') and model.loss_function is not None \
-           and hasattr(model.loss_function, 'require_ctc_layer') else False
-    ctc_weight = model.loss_function.ctc_weight if with_ctc else 0.0
 
     # start with BOS-symbol for each sentence in the batch
     ys = encoder_output.new_full([batch_size, 1], bos_index, dtype=torch.long)
@@ -145,8 +141,8 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
     for _ in range(max_output_length):
         # pylint: disable=unused-variable
         with torch.no_grad():
-            nll_logits, _, _, ctc_logits = model(
-                return_type="decode_ctc" if with_ctc else "decode",
+            nll_logits, _, _, _ = model(
+                return_type="decode",
                 trg_input=ys, # model.trg_embed(ys) # embed the previous tokens
                 encoder_output=encoder_output,
                 encoder_hidden=None,
@@ -155,16 +151,7 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
                 decoder_hidden=None,
                 trg_mask=trg_mask
             )
-
-            if with_ctc and torch.is_tensor(ctc_logits):
-                assert ctc_logits[:, -1].size() == nll_logits[:, -1].size()
-                # linear interpolation of nll_loss and ctc_loss
-                logits = (1-ctc_weight) * nll_logits[:, -1] \
-                         + ctc_weight * ctc_logits[:, -1]
-            else: # default: Xent logits
-                logits = nll_logits[:, -1]
-
-            #logits = nll_logits[:, -1]
+            logits = nll_logits[:, -1]
             _, next_word = torch.max(logits, dim=1)
             next_word = next_word.data
             ys = torch.cat([ys, next_word.unsqueeze(-1)], dim=1)
@@ -215,10 +202,6 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
     att_vectors = None  # not used for Transformer
     hidden = None  # not used for Transformer
     trg_mask = None  # not used for RNN
-    with_ctc = model.loss_function.require_ctc_layer \
-        if hasattr(model, 'loss_function') and model.loss_function is not None \
-           and hasattr(model.loss_function, 'require_ctc_layer') else False
-    ctc_weight = model.loss_function.ctc_weight if with_ctc else 0.0
 
     # Recurrent models only: initialize RNN hidden state
     if not transformer:
@@ -297,8 +280,8 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
             # logits: logits for final softmax
             with torch.no_grad():
                 # pylint: disable=unused-variable
-                nll_logits, _, _, ctc_logits = model(
-                    return_type="decode_ctc" if with_ctc else "decode",
+                nll_logits, _, _, _ = model(
+                    return_type="decode",
                     encoder_output=encoder_output,
                     encoder_hidden=None, # only for initializing decoder_hidden
                     src_mask=src_mask,
@@ -311,12 +294,7 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
 
             # For the Transformer we made predictions for all time steps up to
             # this point, so we only want to know about the last time step.
-            if with_ctc and torch.is_tensor(ctc_logits):
-                logits = (1-ctc_weight) * nll_logits[:, -1] \
-                         + ctc_weight * ctc_logits[:, -1]
-            else: # default: Xent logits
-                logits = nll_logits[:, -1] # keep only the last time step
-            #logits = nll_logits[:, -1]
+            logits = nll_logits[:, -1]
             hidden = None
         else:
             # For Recurrent models, only feed the previous trg word prediction
