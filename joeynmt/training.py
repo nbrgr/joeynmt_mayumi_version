@@ -346,10 +346,6 @@ class TrainManager:
         else:
             logger.info("Reset scheduler.")
 
-        # restore counts
-        self.stats.steps = model_checkpoint["steps"]
-        self.stats.total_tokens = model_checkpoint["total_tokens"]
-
         if not reset_best_ckpt:
             self.stats.best_ckpt_score = model_checkpoint["best_ckpt_score"]
             self.stats.best_ckpt_iter = model_checkpoint["best_ckpt_iteration"]
@@ -357,9 +353,12 @@ class TrainManager:
             logger.info("Reset tracking of the best checkpoint.")
 
         if not reset_iter_state:
-            assert 'train_iter_state' in model_checkpoint
+            # restore counters
+            self.stats.steps = model_checkpoint["steps"]
+            self.stats.total_tokens = model_checkpoint["total_tokens"]
             self.train_iter_state = model_checkpoint["train_iter_state"]
         else:
+            # reset counters if explicitly 'train_iter_state: True' in config
             logger.info("Reset data iterator (random seed: {%d}).", self.seed)
 
         # fp16
