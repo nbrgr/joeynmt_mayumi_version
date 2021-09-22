@@ -44,9 +44,11 @@ class Vocabulary:
         self.pad_index = self.lookup(PAD_TOKEN)
         self.bos_index = self.lookup(BOS_TOKEN)
         self.eos_index = self.lookup(EOS_TOKEN)
+        self.unk_index = self.lookup(UNK_TOKEN)
         assert self.pad_index == PAD_ID
         assert self.bos_index == BOS_ID
         assert self.eos_index == EOS_ID
+        assert self.unk_index == UNK_ID
         assert self._itos[UNK_ID] == UNK_TOKEN
 
     def __str__(self) -> str:

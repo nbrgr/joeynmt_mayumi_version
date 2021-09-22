@@ -114,9 +114,9 @@ class CoVoST2(Dataset):
     EN_XX_LANGUAGES = ["de", "tr", "fa", "sv-SE", "mn", "zh-CN", "cy", "ca",
                        "sl", "et", "id", "ar", "ta", "lv", "ja"]
     FEATURE_ROOT = f"fbank{N_MEL_FILTERS}"
+    MP3_ROOT = "clips"
 
-    def __init__(self, root: Path, src_lang: str, trg_lang: str, split: str,
-                 return_wav: bool = True):
+    def __init__(self, root: Path, src_lang: str, trg_lang: str, split: str):
         assert split in self.SPLITS
         assert src_lang is not None
         self.has_translation = trg_lang is not None # False -> asr; True -> ast
@@ -158,10 +158,11 @@ class CoVoST2(Dataset):
             self.df = df[df["split"] == split]
 
         # check validity
-        self._drop_invalid(mp3_path=(self.root / "clips"))
+        self._drop_invalid(mp3_path=(self.root / self.MP3_ROOT))
 
-        # whether to call torchaudio.load()
-        self.return_wav = return_wav
+        # return flags
+        self.return_wav = True  # whether to call torchaudio.load()
+        self.return_npy = False # whether to call np.load()
 
     def _drop_invalid(self, mp3_path: Path) -> None:
         """check AudioMetaData"""
@@ -172,7 +173,7 @@ class CoVoST2(Dataset):
         self.df.dropna(subset=['num_frames'], inplace=True)
         self.df.reset_index(drop=True, inplace=True)
 
-    def __getitem__(self, n: int) -> Tuple[Tensor, int, int, str, str, str, str]:
+    def __getitem__(self, n: int) -> Tuple[Tensor, int, np.ndarray, str, str, str, str]:
         """Load the n-th sample from the dataset.
 
         :param n: The index of the sample to be loaded
@@ -182,20 +183,27 @@ class CoVoST2(Dataset):
         data = self.df.iloc[n]
         assert not math.isnan(data['num_frames']), data
 
-        mp3_path = self.root / "clips" / data["path"]
         transcription = data["sentence"]
         translation = data["translation"] if self.has_translation else None
         speaker_id = data["client_id"]
         utterance_id = data["path"].replace(".mp3", "")
-        num_frames = int(data['num_frames'])
+
+        if self.return_npy:
+            npy_path = self.root / self.FEATURE_ROOT / data["path"].replace(".mp3", ".npy")
+            assert npy_path.is_file()
+            npy = np.load(npy_path.as_posix())
+            if "num_frames" in data:
+                assert abs(data["num_frames"] - npy.shape[0]) <= 1, \
+                    (data["num_frames"], npy.shape[0])
+        else:
+            npy = None
+
         if self.return_wav:
+            mp3_path = self.root / self.MP3_ROOT / data["path"]
             waveform, sample_rate = torchaudio.load(mp3_path)
-            #if num_frames is None:
-            #    num_frames = get_n_frames(waveform.size(1), sample_rate)
-            #    self.data[n]['num_frames'] = num_frames
         else:
             waveform, sample_rate = None, None
-        return (waveform, sample_rate, num_frames, transcription, translation,
+        return (waveform, sample_rate, npy, transcription, translation,
                 speaker_id, utterance_id)
 
     def __len__(self) -> int:
@@ -203,6 +211,7 @@ class CoVoST2(Dataset):
 
 
 class Tatoeba(CoVoST2):
+    SPLITS = ['test']
     URL_TEMPLATE = "https://dl.fbaipublicfiles.com/covost/tatoeba.zip"
     LANG_CODE_2_TO_3 = {
         'fr': 'fra', 'de': 'deu', 'nl': 'nld', 'ru': 'rus', 'en': 'eng', 'es': 'spa'
@@ -234,7 +243,7 @@ class Tatoeba(CoVoST2):
         #save_tsv(df, self.root / cv_tsv_path.name)
 
         # download mp3
-        mp3_path = self.root / "clips"
+        mp3_path = self.root / self.MP3_ROOT
         mp3_path.mkdir(exist_ok=True)
         self._download_mp3(lang=src_lang, mp3_path=mp3_path, overwrite=False)
 
@@ -243,6 +252,7 @@ class Tatoeba(CoVoST2):
 
         # whether to call torchaudio.load()
         self.return_wav = True
+        self.return_npy = False
 
     def _download_mp3(self, lang: str, mp3_path: Path, overwrite: bool = False):
         lang_3 = self.LANG_CODE_2_TO_3[lang]
@@ -257,34 +267,37 @@ class Tatoeba(CoVoST2):
                     continue
 
 
-def process(data_root, src_lang, trg_lang):
+def process(data_root: str, src_lang: str, trg_lang: str, tatoeba: bool):
+    data_class = CoVoST2 if not tatoeba else Tatoeba
+
     root = Path(data_root).absolute()
-    curr_root = root / src_lang
+    curr_root = (root / src_lang) if not tatoeba else (root / 'tatoeba')
 
     # filterbank dir (shared across splits)
-    feature_root = curr_root / CoVoST2.FEATURE_ROOT
+    feature_root = curr_root / data_class.FEATURE_ROOT
     feature_root.mkdir(exist_ok=True)
 
     # Extract features
-    print(f"Create {src_lang}-{trg_lang} dataset.")
+    print(f"Create {data_class.__name__} {src_lang}-{trg_lang} dataset.")
     datasets = {}
-    for split in CoVoST2.SPLITS:
+    for split in data_class.SPLITS:
         print(f"Fetching split {split}...")
-        datasets[split] = CoVoST2(root, src_lang, trg_lang, split)
-
+        datasets[split] = data_class(root, src_lang, trg_lang, split)
+        
         print(f"Extracting log mel filter bank features...")
         assert datasets[split].return_wav is True
-        for i, (wav, sample_rate, n_frames, _, _, spk_id, utt_id) \
+        for i, (wav, sample_rate, _, _, _, spk_id, utt_id) \
                 in enumerate(tqdm(datasets[split])):
             try:
-                extract_fbank_features(wav, sample_rate, n_frames, utt_id,
-                                       feature_root=feature_root,
+                extract_fbank_features(waveform=wav,
+                                       sample_rate=sample_rate,
+                                       output_path=(feature_root / f'{utt_id}.npy'),
                                        n_mel_bins=N_MEL_FILTERS,
                                        overwrite=False)
             except Exception as e:
-                print(f'Skip {i}-th instance in {curr_root / utt_id}.mp3.', e)
+                print(f'Skip {i}-th instance: {utt_id}.mp3.', e)
                 continue
-
+        
     # Pack features into ZIP
     print("ZIPing features...")
     create_zip(feature_root, feature_root.with_suffix(".zip"))
@@ -295,8 +308,9 @@ def process(data_root, src_lang, trg_lang):
     all_data = []
     with tqdm(total=len(zip_manifest)) as pbar:
         for split, dataset in datasets.items():
+            dataset.return_npy = True
             dataset.return_wav = False  # a bit faster...
-            for i, (_, _, n_frames, src_utt, trg_utt, spk_id, utt_id) \
+            for i, (_, _, npy, src_utt, trg_utt, spk_id, utt_id) \
                     in enumerate(dataset):
                 # cleanup text
                 if LOWERCASE[src_lang]:
@@ -308,40 +322,38 @@ def process(data_root, src_lang, trg_lang):
                 if REMOVE_PUNC[trg_lang]:
                     trg_utt = remove_punc(trg_utt)
                 # construct entry
-                try:
-                    record = {
-                        "id": utt_id,
-                        "src": zip_manifest[utt_id],
-                        "n_frames": n_frames,
-                        f"{src_lang}_utt": src_utt,
-                        f"{trg_lang}_utt": trg_utt,
-                        "speaker": spk_id,
-                        "split": split
-                    }
-                    all_data.append(record)
-                except Exception as e:
-                    print(f'Skip {i}-th instance in {curr_root / utt_id}.mp3.', e)
+                record = {
+                    "id": utt_id,
+                    "src": zip_manifest[utt_id],
+                    "n_frames": npy.shape[0],
+                    f"{src_lang}_utt": src_utt,
+                    f"{trg_lang}_utt": trg_utt,
+                    "speaker": spk_id,
+                    "split": split
+                }
+                all_data.append(record)
                 pbar.update(1)
         all_df = pd.DataFrame.from_records(all_data)
         save_tsv(all_df, (curr_root / 'joey_all_data_tmp.tsv'))
         del all_data
-    
-    # Generate joint vocab
-    print("Building joint vocab...")
-    raw_textfile = curr_root / f"train.{src_lang}{trg_lang}"
-    train_df = all_df[all_df.split == "train"]
-    train = pd.concat([train_df[f'{src_lang}_utt'], train_df[f'{trg_lang}_utt']])
-    write_list_to_file(raw_textfile, train.to_list())
 
-    spm_filename = curr_root / f"spm_{SP_MODEL_TYPE}{VOCAB_SIZE}"
-    kwargs = {'model_type': SP_MODEL_TYPE,
-              'vocab_size': VOCAB_SIZE,
-              'character_coverage': 1.0,
-              'num_workers': N_WORKERS}
-    spm = build_sp_model(raw_textfile, spm_filename, **kwargs)
+    # Generate joint vocab
+    if not tatoeba:
+        print("Building joint vocab...")
+        raw_textfile = curr_root / f"train.{src_lang}{trg_lang}"
+        train_df = all_df[all_df.split == "train"]
+        train = pd.concat([train_df[f'{src_lang}_utt'], train_df[f'{trg_lang}_utt']])
+        write_list_to_file(raw_textfile, train.to_list())
+
+        spm_filename = curr_root / f"spm_{SP_MODEL_TYPE}{VOCAB_SIZE}"
+        kwargs = {'model_type': SP_MODEL_TYPE,
+                  'vocab_size': VOCAB_SIZE,
+                  'character_coverage': 1.0,
+                  'num_workers': N_WORKERS}
+        spm = build_sp_model(raw_textfile, spm_filename, **kwargs)
 
     print("Saving data in tsv ...")
-    for split in CoVoST2.SPLITS:
+    for split in data_class.SPLITS:
         split_df = all_df[all_df.split == split]
         for _task, _lang in [("asr", src_lang), ("st", trg_lang)]:
             # apply joint vocab
@@ -358,11 +370,12 @@ def process(data_root, src_lang, trg_lang):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_root", "-d", required=True, type=str)
-    parser.add_argument("--src_lang", default="en", type=str)
-    parser.add_argument("--trg_lang", default="de", type=str)
+    parser.add_argument("--src_lang", default="en", required=True, type=str)
+    parser.add_argument("--trg_lang", default="de", required=True, type=str)
+    parser.add_argument("--tatoeba", action="store_true")
     args = parser.parse_args()
 
-    process(args.data_root, args.src_lang, args.trg_lang)
+    process(args.data_root, args.src_lang, args.trg_lang, args.tatoeba)
 
 
 if __name__ == "__main__":

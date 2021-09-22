@@ -19,8 +19,8 @@ __all__ = ["greedy", "transformer_greedy", "beam_search", "run_batch"]
 
 
 def greedy(src_mask: Tensor, max_output_length: int, model: Model,
-           encoder_output: Tensor, encoder_hidden: Tensor) \
-        -> Tuple[np.array, np.array]:
+           encoder_output: Tensor, encoder_hidden: Tensor,
+           generate_unk: bool = False) -> Tuple[np.array, np.array]:
     """
     Greedy decoding. Select the token word highest probability at each time
     step. This function is a wrapper that calls recurrent_greedy for
@@ -31,7 +31,11 @@ def greedy(src_mask: Tensor, max_output_length: int, model: Model,
     :param model: model to use for greedy decoding
     :param encoder_output: encoder hidden states for attention
     :param encoder_hidden: encoder last state for decoder initialization
+    :param generate_unk: whether to generate UNK token. if folse,
+            the probability of UNK token will artificially be set to zero.
     :return:
+        - stacked_output: output hypotheses (2d array of indices),
+        - stacked_attention_scores: attention scores (3d array)
     """
     # pylint: disable=no-else-return
     if isinstance(model.decoder, TransformerDecoder):
@@ -47,7 +51,8 @@ def greedy(src_mask: Tensor, max_output_length: int, model: Model,
 
 
 def recurrent_greedy(src_mask: Tensor, max_output_length: int, model: Model,
-                     encoder_output: Tensor, encoder_hidden: Tensor) \
+                     encoder_output: Tensor, encoder_hidden: Tensor,
+                     generate_unk: bool = False) \
         -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Greedy decoding: in each step, choose the word that gets highest score.
@@ -58,12 +63,15 @@ def recurrent_greedy(src_mask: Tensor, max_output_length: int, model: Model,
     :param model: model to use for greedy decoding
     :param encoder_output: encoder hidden states for attention
     :param encoder_hidden: encoder last state for decoder initialization
+    :param generate_unk: whether to generate UNK token. if folse,
+            the probability of UNK token will artificially be set to zero.
     :return:
         - stacked_output: output hypotheses (2d array of indices),
         - stacked_attention_scores: attention scores (3d array)
     """
     bos_index = model.bos_index
     eos_index = model.eos_index
+    unk_index = model.unk_index
     batch_size = src_mask.size(0)
     prev_y = src_mask.new_full(size=[batch_size, 1], fill_value=bos_index,
                                dtype=torch.long)
@@ -88,6 +96,8 @@ def recurrent_greedy(src_mask: Tensor, max_output_length: int, model: Model,
             # logits: batch x time=1 x vocab (logits)
 
         # greedy decoding: choose arg max over vocabulary in each step
+        if not generate_unk:
+            logits[:, :, unk_index] = float("-inf")
         next_word = torch.argmax(logits, dim=-1)  # batch x time=1
         output.append(next_word.squeeze(1).detach().cpu().numpy())
         prev_y = next_word
@@ -107,7 +117,8 @@ def recurrent_greedy(src_mask: Tensor, max_output_length: int, model: Model,
 
 
 def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
-                       encoder_output: Tensor, encoder_hidden: Tensor) \
+                       encoder_output: Tensor, encoder_hidden: Tensor,
+                       generate_unk: bool = False) \
         -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Special greedy function for transformer, since it works differently.
@@ -118,6 +129,8 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
     :param model: model to use for greedy decoding
     :param encoder_output: encoder hidden states for attention
     :param encoder_hidden: encoder final state (unused in Transformer)
+    :param generate_unk: whether to generate UNK token. if folse,
+            the probability of UNK token will artificially be set to zero.
     :return:
         - stacked_output: output hypotheses (2d array of indices),
         - stacked_attention_scores: attention scores (3d array)
@@ -125,6 +138,7 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
     # pylint: disable=unused-argument
     bos_index = model.bos_index
     eos_index = model.eos_index
+    unk_index = model.unk_index
     batch_size = src_mask.size(0)
 
     # start with BOS-symbol for each sentence in the batch
@@ -152,6 +166,8 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
                 trg_mask=trg_mask
             )
             logits = nll_logits[:, -1]
+            if not generate_unk:
+                logits[:, unk_index] = float("-inf")
             _, next_word = torch.max(logits, dim=1)
             next_word = next_word.data
             ys = torch.cat([ys, next_word.unsqueeze(-1)], dim=1)
@@ -169,8 +185,8 @@ def transformer_greedy(src_mask: Tensor, max_output_length: int, model: Model,
 
 def beam_search(model: Model, size: int, encoder_output: Tensor,
                 encoder_hidden: Tensor, src_mask: Tensor,
-                max_output_length: int, alpha: float, n_best: int = 1) \
-        -> Tuple[np.ndarray, Optional[np.ndarray]]:
+                max_output_length: int, alpha: float, n_best: int = 1,
+                generate_unk = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Beam search with size k.
     Inspired by OpenNMT-py, adapted for Transformer.
@@ -183,6 +199,8 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
     :param max_output_length:
     :param alpha: `alpha` factor for length penalty
     :param n_best: return this many hypotheses, <= beam (currently only 1)
+    :param generate_unk: whether to generate UNK token. if folse,
+            the probability of UNK token will artificially be set to zero.
     :return:
         - stacked_output: output hypotheses (2d array of indices),
         - stacked_attention_scores: attention scores (3d array)
@@ -195,6 +213,7 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
     bos_index = model.bos_index
     eos_index = model.eos_index
     pad_index = model.pad_index
+    unk_index = model.unk_index
     trg_vocab_size = model.decoder.output_size
     device = encoder_output.device
     transformer = isinstance(model.decoder, TransformerDecoder)
@@ -316,6 +335,8 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
 
         # batch*k x trg_vocab
         log_probs = F.log_softmax(logits, dim=-1).squeeze(1)
+        if not generate_unk:
+            log_probs[:, unk_index] = float("-inf")
 
         # multiply probs by the beam probability (=add logprobs)
         log_probs += topk_log_probs.view(-1).unsqueeze(1)
@@ -439,7 +460,8 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
 
 
 def run_batch(model: Model, batch: Batch, max_output_length: int,
-              beam_size: int, beam_alpha: float, n_best: int = 1) \
+              beam_size: int, beam_alpha: float, n_best: int = 1,
+              generate_unk: bool = False) \
         -> Tuple[np.ndarray, Optional[np.ndarray]]:
     """
     Get outputs and attentions scores for a given batch
@@ -475,7 +497,8 @@ def run_batch(model: Model, batch: Batch, max_output_length: int,
             max_output_length=max_output_length,
             model=model,
             encoder_output=encoder_output,
-            encoder_hidden=encoder_hidden)
+            encoder_hidden=encoder_hidden,
+            generate_unk=generate_unk)
         # batch, time, max_src_length
     else:  # beam search
         stacked_output, stacked_attention_scores = beam_search(
@@ -486,6 +509,7 @@ def run_batch(model: Model, batch: Batch, max_output_length: int,
             src_mask=src_mask,
             max_output_length=max_output_length,
             alpha=beam_alpha,
-            n_best=n_best)
+            n_best=n_best,
+            generate_unk=generate_unk)
 
     return stacked_output, stacked_attention_scores

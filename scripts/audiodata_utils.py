@@ -27,27 +27,20 @@ def get_zip_manifest(zip_path: Path, npy_root: Optional[Path] = None):
     manifest = {}
     with zipfile.ZipFile(zip_path, mode="r") as f:
         info = f.infolist()
-    error_flag = []
+    # retrieve offsets
     for i in tqdm(info):
         utt_id = Path(i.filename).stem
         offset, file_size = i.header_offset + 30 + len(i.filename), i.file_size
         with zip_path.open("rb") as f:
             f.seek(offset)
             data = f.read(file_size)
-            try:
-                assert len(data) > 1 and _is_npy_data(data), (utt_id, len(data), e)
-            except Exception as e:
-                print((utt_id, len(data), e))
-                error_flag.append((utt_id, len(data)))
+            assert len(data) > 1 and _is_npy_data(data), (utt_id, len(data))
         manifest[utt_id] = f"{zip_path.name}:{offset}:{file_size}"
         # sanity check
         if npy_root is not None:
             byte_data = np.load(io.BytesIO(data))
             npy_data = np.load((npy_root / f"{utt_id}.npy").as_posix())
             assert np.allclose(byte_data, npy_data)
-    if len(error_flag) > 0:
-        print(error_flag)
-        raise Exception
     return manifest
 
 

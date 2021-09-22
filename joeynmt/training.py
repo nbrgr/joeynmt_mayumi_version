@@ -819,10 +819,16 @@ def train(cfg_file: str, skip_test: bool = False) -> None:
     src_vocab, trg_vocab, train_data, dev_data, test_data = load_data(
         data_cfg=cfg["data"])
 
-    # store the vocabs
+    # store the vocabs and tokenizers
     if task == "MT":
         src_vocab.to_file(model_dir / "src_vocab.txt")
+        if "model_file" in cfg["data"]["src"]["spm"]:
+            src_tok = Path(cfg["data"]["src"]["spm"]["model_file"])
+            shutil.copy2(src_tok, (model_dir / src_tok.name).as_posix())
     trg_vocab.to_file(model_dir / "trg_vocab.txt")
+    if "model_file" in cfg["data"]["trg"]["spm"]:
+        trg_tok = Path(cfg["data"]["trg"]["spm"]["model_file"])
+        shutil.copy2(trg_tok, (model_dir / trg_tok.name).as_posix())
 
     # build an encoder-decoder model
     model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)

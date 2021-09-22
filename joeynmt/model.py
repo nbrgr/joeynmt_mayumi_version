@@ -57,6 +57,7 @@ class Model(nn.Module):
         self.pad_index = self.trg_vocab.pad_index
         self.bos_index = self.trg_vocab.bos_index
         self.eos_index = self.trg_vocab.eos_index
+        self.unk_index = self.trg_vocab.unk_index
         self._loss_function = None # set by the TrainManager
 
     @property

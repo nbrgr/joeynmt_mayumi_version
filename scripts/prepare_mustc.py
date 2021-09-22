@@ -29,7 +29,10 @@ Adapted from https://github.com/pytorch/fairseq/blob/master/examples/speech_to_t
             │   ├── [...]
             │   └── ted_767_1.npy
             ├── fbank80.zip
-            └── clips
+            ├── joey_train_{asr|st}.tsv
+            ├── joey_dev_{asr|st}.tsv
+            ├── joey_tst-COMMON_{asr|st}.tsv
+            └── joey_tst-HE_{asr|st}.tsv
 """
 
 import argparse
@@ -41,6 +44,7 @@ from multiprocessing import Pool, cpu_count
 
 import yaml
 import pandas as pd
+import numpy as np
 
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -56,7 +60,7 @@ from joeynmt.helpers_for_audio import extract_fbank_features, get_n_frames
 COLUMNS = ["id", "src", "n_frames", "trg", "speaker"]
 
 N_MEL_FILTERS = 80
-N_WORKERS = 4 #cpu_count()
+N_WORKERS = 16 #cpu_count()
 SP_MODEL_TYPE = "bpe" # one of ["bpe", "unigram", "char"]
 VOCAB_SIZE = 7000 #joint vocab
 LOWERCASE = {'en': True, 'de': False}
@@ -70,6 +74,7 @@ class MUSTC(Dataset):
 
     SPLITS = ["dev", "tst-COMMON", "tst-HE", "train"]
     LANGUAGES = ["de", "es", "fr", "it", "nl", "pt", "ro", "ru"]
+    FEATURE_ROOT = f"fbank{N_MEL_FILTERS}"
 
     def __init__(self, root: Path, lang: str, split: str) -> None:
         assert split in self.SPLITS and lang in self.LANGUAGES
@@ -107,23 +112,29 @@ class MUSTC(Dataset):
                 })
 
         self.return_wav = True
+        self.return_npy = False
 
-    def __getitem__(self, n: int) -> Tuple[Tensor, int, int, str, str, str, str]:
+    def __getitem__(self, n: int) -> Tuple[Tensor, int, np.ndarray, str, str, str, str]:
         #wav_path, offset, duration, src_utt, tgt_utt, spk_id, utt_id = self.data[n]
         data = self.data[n]
+
+        if self.return_npy:
+            npy_path = self.root / self.FEATURE_ROOT / data["path"].replace(".mp3", ".npy")
+            assert npy_path.is_file()
+            npy = np.load(npy_path.as_posix())
+        else:
+            npy = None
+
         if self.return_wav:
             waveform, sr = torchaudio.load(data["wav_path"],
                                            frame_offset=data["offset"],
                                            num_frames=data["duration"])
             assert data["duration"] == waveform.size(1), (data["duration"],
                                                           waveform.size(1))
-            n_frames = get_n_frames(waveform.size(1), sr)
-            self.data[n]['n_frames'] = n_frames
         else:
             waveform, sr = None, None
-            assert 'n_frames' in data
-            n_frames = int(data['n_frames'])
-        return waveform, sr, n_frames, data["src_utt"], data["trg_utt"], \
+
+        return waveform, sr, npy, data["src_utt"], data["trg_utt"], \
                data["spk_id"], data["utt_id"]
 
     def __len__(self) -> int:
@@ -136,7 +147,8 @@ def process(data_root, languages):
         assert lang in MUSTC.LANGUAGES
         cur_root = root / f"en-{lang}"
 
-        feature_root = cur_root / f"fbank{N_MEL_FILTERS}"
+        # dir for filterbank (shared across splits)
+        feature_root = cur_root / MUSTC.FEATURE_ROOT
         feature_root.mkdir(exist_ok=True)
 
         # normalizer
@@ -150,21 +162,22 @@ def process(data_root, languages):
                                        escape=True)}
 
         # Extract features
-        print(f"Create en-{lang} dataset.")
+        print(f"Create MuST-C en-{lang} dataset.")
         datasets = {}
         for split in MUSTC.SPLITS:
             print(f"Fetching split {split}...")
             datasets[split] = MUSTC(root, lang, split)
             print(f"Extracting log mel filter bank features ...")
-            for i, (wav, sr, n_frames, _, _, spk_id, utt_id) \
-                    in enumerate(tqdm(datasets[split])):
+            for i, (wav, sr, _, _, _, _, utt_id) in enumerate(tqdm(datasets[split])):
                 try:
-                    extract_fbank_features(wav, sr, n_frames, utt_id,
-                                           feature_root=feature_root,
+                    extract_fbank_features(waveform=wav,
+                                           sample_rate=sr,
+                                           output_path=(feature_root / f'{utt_id}.npy'),
                                            n_mel_bins=N_MEL_FILTERS,
                                            overwrite=False)
                 except Exception as e:
-                    print(i, e)
+                    print(f'Skip {i}-th instance: {utt_id}.mp3.', e)
+                    continue
         
         # Pack features into ZIP
         print("ZIPing features...")
@@ -177,11 +190,12 @@ def process(data_root, languages):
         with tqdm(total=len(zip_manifest)) as pbar:
             for split, dataset in datasets.items():
                 dataset.return_wav = False  # a bit faster...
-                for _, _, n_frames, src_utt, trg_utt, spk_id, utt_id in dataset:
+                dataset.return_npy = True
+                for _, _, npy, src_utt, trg_utt, spk_id, utt_id in dataset:
                     all_data.append({
                         "id": utt_id,
                         "src": zip_manifest[utt_id],
-                        "n_frames": n_frames,
+                        "n_frames": npy.shape[0],
                         "en_orig": src_utt,
                         f"{lang}_orig": trg_utt,
                         "en_utt": normalizer['en'](src_utt),
@@ -190,9 +204,9 @@ def process(data_root, languages):
                         "split": split
                     })
                     pbar.update(1)
-            all_df = pd.DataFrame.from_records(all_data)
-            save_tsv(all_df, (cur_root/'all_data_tmp.tsv'))
-
+        all_df = pd.DataFrame.from_records(all_data)
+        save_tsv(all_df, (cur_root / 'all_data_tmp.tsv'))
+        del all_data
 
         # Generate joint vocab
         print("Building joint vocab...")
@@ -224,6 +238,7 @@ def process(data_root, languages):
                 # save text file (for mt pretraining)
                 write_list_to_file(cur_root / f"{split}.{_lang}",
                                    split_df[f"{_lang}_utt"].to_list())
+            print(f'\t{split} tsv saved.')
         print("Done!")
 
 

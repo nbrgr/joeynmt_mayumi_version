@@ -4,7 +4,6 @@ Collection of helper functions for audio processing
 """
 
 import io
-import os
 from pathlib import Path
 import sys
 from typing import List, Optional, Tuple, Union
@@ -24,7 +23,7 @@ _REMOVE_PUNC_MAP = {i: None for i in range(sys.maxunicode)
                     if unicodedata.category(chr(i)).startswith('P')}
 def remove_punc(sent: str) -> str:
     """Remove punctuation based on Unicode category.
-    Note: punctuations in audio transcription are often removed.
+    Note: punctuations in audio transcription are sometimes removed.
 
     :param sent: sentence string
     """
@@ -36,7 +35,7 @@ class SpeechInstance:
         """Speech Instance
 
         :param fbank_path: (str) Feature file path in the format either of
-            "<zip path>:<byte offset>:<byte length>" or "<file name>.mp3"
+            "<zip path>:<byte offset>:<byte length>" or "<file name>.{mp3|wav}"
         :param n_frames: (int) number of frames
         :param idx: index
         """
@@ -69,16 +68,10 @@ def _get_torchaudio_fbank(waveform: torch.FloatTensor, sample_rate: int,
 # from fairseq
 def extract_fbank_features(waveform: torch.FloatTensor,
                            sample_rate: int,
-                           n_frames: int,
-                           utt_id: str,
-                           feature_root: Optional[Path] = None,
+                           output_path: Optional[Path] = None,
                            n_mel_bins: int = 80,
                            overwrite: bool = False) -> Optional[np.ndarray]:
     # pylint: disable=inconsistent-return-statements
-
-    output_path = None
-    if feature_root is not None:
-        output_path = feature_root / f"{utt_id}.npy"
 
     if output_path is not None and output_path.is_file() and not overwrite:
         return
@@ -88,10 +81,9 @@ def extract_fbank_features(waveform: torch.FloatTensor,
 
     try:
         features = _get_torchaudio_fbank(_waveform, sample_rate, n_mel_bins)
-        assert abs(features.shape[0] - n_frames) <= 1, (n_frames, features.shape)
     except Exception as e:
         raise ValueError(f"torchaudio faild to extract mel filterbank features "
-                         f"at utt_id: {utt_id}. {e}")
+                         f"at: {output_path.stem}. {e}")
 
     if output_path is not None:
         np.save(output_path.as_posix(), features)
@@ -137,8 +129,7 @@ def get_features(root_path: Path, fbank_path: str) -> np.ndarray:
             features = np.load(_path.as_posix())
         elif _path.suffix in [".mp3", ".wav"]:
             waveform, sample_rate = torchaudio.load(_path.as_posix())
-            num_frames = get_n_frames(waveform.size(1), sample_rate)
-            features = extract_fbank_features(waveform, sample_rate, num_frames)
+            features = extract_fbank_features(waveform, sample_rate, utt_id=None)
         else:
             raise ValueError(f"Invalid file type: {_path}")
     elif len(extra) == 2:

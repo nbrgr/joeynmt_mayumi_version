@@ -119,8 +119,8 @@ def validate_on_data(model: Model,
                     return_type="loss", **vars(batch))
             if n_gpu > 1:
                 batch_loss = batch_loss.sum() # sum on multi-gpu
-                nll_loss = nll_loss.sum()
-                ctc_loss = ctc_loss.sum()
+                nll_loss = nll_loss.sum() if torch.is_tensor(nll_loss) else None
+                ctc_loss = ctc_loss.sum() if torch.is_tensor(nll_loss) else None
                 n_correct = n_correct.float().sum()
             total_loss['loss'] += batch_loss.item() # float
             if torch.is_tensor(nll_loss): # nll_loss is not None
@@ -135,7 +135,7 @@ def validate_on_data(model: Model,
         output, attention_scores = run_batch(
             model=model, batch=batch, beam_size=beam_size,
             beam_alpha=beam_alpha, max_output_length=max_output_length,
-            n_best=n_best)
+            n_best=n_best, generate_unk=False)
 
         # sort outputs back to original order
         all_outputs.extend(output[sort_reverse_index])
@@ -146,8 +146,10 @@ def validate_on_data(model: Model,
     if compute_loss and total_ntokens > 0:
         total_normalizer = 1 if total_normalizer == 0 else total_normalizer
         valid_scores['loss'] = total_loss['loss'] / total_normalizer
-        valid_scores['nll_loss'] = total_loss['nll_loss'] / total_normalizer
-        valid_scores['ctc_loss'] = total_loss['ctc_loss'] / total_normalizer
+        if 'nll_loss' in total_loss:
+            valid_scores['nll_loss'] = total_loss['nll_loss'] / total_normalizer
+        if 'ctc_loss' in total_loss:
+            valid_scores['ctc_loss'] = total_loss['ctc_loss'] / total_normalizer
         # accuracy before decoding
         valid_scores['acc'] = total_n_correct / total_ntokens
         # exponent of token-level negative log prob
