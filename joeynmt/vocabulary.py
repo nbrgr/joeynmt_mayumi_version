@@ -202,7 +202,7 @@ def build_vocab(max_size: int, min_freq: int, tokens: List[List[str]] = None,
     if vocab_file is not None:
         # load it from file
         if vocab_file.suffix == ".tsv":
-            df = pd.read_csv(vocab_file, sep="\t", encoding="utf8",
+            df = pd.read_csv(vocab_file, sep="\t", encoding="utf8", quoting=3,
                              keep_default_na=False, index_col=None,
                              header=None, names=['surface', 'count'],
                              dtype={'surface': str, 'count': int})

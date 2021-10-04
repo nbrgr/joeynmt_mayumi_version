@@ -35,16 +35,13 @@ class SpeechInstance:
         """Speech Instance
 
         :param fbank_path: (str) Feature file path in the format either of
-            "<zip path>:<byte offset>:<byte length>" or "<file name>.{mp3|wav}"
+            "<zip path>:<byte offset>:<byte length>" or "<file name>.{mp3|wav|npy}"
         :param n_frames: (int) number of frames
         :param idx: index
         """
         self.fbank_path = fbank_path
         self.n_frames = n_frames
         self.id = idx
-
-        if n_frames is None and self.fbank_path.suffix in ['.mp3', '.wav']:
-            self.n_frames = torchaudio.info(self.fbank_path)[0].length * 100
 
     def __len__(self):
         return self.n_frames
@@ -129,7 +126,7 @@ def get_features(root_path: Path, fbank_path: str) -> np.ndarray:
             features = np.load(_path.as_posix())
         elif _path.suffix in [".mp3", ".wav"]:
             waveform, sample_rate = torchaudio.load(_path.as_posix())
-            features = extract_fbank_features(waveform, sample_rate, utt_id=None)
+            features = extract_fbank_features(waveform, sample_rate)
         else:
             raise ValueError(f"Invalid file type: {_path}")
     elif len(extra) == 2:

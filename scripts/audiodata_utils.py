@@ -88,7 +88,7 @@ def build_sp_model(input_path: Path, model_path_prefix: Path,
     ]
     if 'user_defined_symbols' in kwargs.keys():
         arguments.append(f"--user_defined_symbols={kwargs['user_defined_symbols']}")
-    #sp.SentencePieceTrainer.Train(" ".join(arguments))
+    sp.SentencePieceTrainer.Train(" ".join(arguments))
 
     # Load spm model
     spm = sp.SentencePieceProcessor()

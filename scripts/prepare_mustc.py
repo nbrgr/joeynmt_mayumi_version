@@ -78,9 +78,10 @@ class MUSTC(Dataset):
 
     def __init__(self, root: Path, lang: str, split: str) -> None:
         assert split in self.SPLITS and lang in self.LANGUAGES
-        _root = Path(root) / f"en-{lang}" / "data" / split
-        wav_root, txt_root = _root / "wav", _root / "txt"
-        assert _root.is_dir() and wav_root.is_dir() and txt_root.is_dir()
+        self.root = Path(root) / f"en-{lang}"
+        wav_root = self.root / "data" / split / "wav"
+        txt_root = self.root / "data" / split / "txt"
+        assert wav_root.is_dir() and txt_root.is_dir()
         # Load audio segments
         with (txt_root / f"{split}.yaml").open("r") as f:
             segments = yaml.load(f, Loader=yaml.BaseLoader)
@@ -119,7 +120,7 @@ class MUSTC(Dataset):
         data = self.data[n]
 
         if self.return_npy:
-            npy_path = self.root / self.FEATURE_ROOT / data["path"].replace(".mp3", ".npy")
+            npy_path = (self.root / self.FEATURE_ROOT / data["utt_id"]).with_suffix(".npy")
             assert npy_path.is_file()
             npy = np.load(npy_path.as_posix())
         else:
@@ -178,12 +179,13 @@ def process(data_root, languages):
                 except Exception as e:
                     print(f'Skip {i}-th instance: {utt_id}.mp3.', e)
                     continue
-        
+
         # Pack features into ZIP
         print("ZIPing features...")
         create_zip(feature_root, feature_root.with_suffix(".zip"))
         print("Fetching ZIP manifest...")
         zip_manifest = get_zip_manifest(feature_root.with_suffix(".zip"))
+
         # Generate TSV manifest
         print("Generating manifest...")
         all_data = []
@@ -212,7 +214,7 @@ def process(data_root, languages):
         print("Building joint vocab...")
         raw_textfile = cur_root / f"train.en{lang}"
         train_df = all_df[all_df.split == "train"]
-        train = pd.concat([train_df["en_utt"], train_df[f"{lang}_orig"]])
+        train = pd.concat([train_df["en_utt"], train_df[f"{lang}_utt"]])
         write_list_to_file(raw_textfile, train.to_list())
 
         spm_filename = cur_root / f"spm_{SP_MODEL_TYPE}{VOCAB_SIZE}"
@@ -234,7 +236,7 @@ def process(data_root, languages):
                 #    lambda x: ' '.join(spm.encode(x, out_type=str)))
                 # save tsv file
                 save_tsv(split_df.rename(columns={f'{_lang}_utt': 'trg'})[COLUMNS],
-                         cur_root / f"{split}_{_task}.tsv")
+                         cur_root / f"joey_{split}_{_task}.tsv")
                 # save text file (for mt pretraining)
                 write_list_to_file(cur_root / f"{split}.{_lang}",
                                    split_df[f"{_lang}_utt"].to_list())

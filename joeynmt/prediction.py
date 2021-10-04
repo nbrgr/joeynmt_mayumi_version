@@ -14,7 +14,9 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from joeynmt.data import TranslationDataset, TsvDataset, load_data, make_data_iter
+from joeynmt.data import TranslationDataset, TsvDataset, MonoDataset, \
+    load_data, make_data_iter
+from joeynmt.data_augmentation import CMVN
 from joeynmt.helpers import bpe_postprocess, expand_reverse_index, \
     load_checkpoint, load_config, make_logger, read_list_from_file, \
     resolve_ckpt_path, store_attention_plots, write_list_to_file
@@ -103,6 +105,7 @@ def validate_on_data(model: Model,
     total_normalizer = 0
     total_ntokens = 0
     total_n_correct = 0
+
     for batch in valid_iter:
         if batch.nseqs < 1:
             continue
@@ -169,7 +172,8 @@ def validate_on_data(model: Model,
                         for t in decoded_valid]
 
     # if references are given, evaluate against them
-    if valid_references:
+    if data.has_trg:
+        #assert len(valid_references) > 0
         assert len(valid_hypotheses) == len(valid_references)
 
         for eval_metric in eval_metrics:
@@ -222,8 +226,8 @@ def parse_test_args(cfg, mode="test"):
     batch_type = train_cfg.get("eval_batch_type", train_cfg.get("batch_type", "sentence"))
     use_cuda = (train_cfg.get("use_cuda", False) and torch.cuda.is_available())
     device = torch.device("cuda" if use_cuda else "cpu")
+    n_gpu = torch.cuda.device_count() if use_cuda else 0
     if mode == 'test':
-        n_gpu = torch.cuda.device_count() if use_cuda else 0
         #k = test_cfg.get("beam_size", 1)
         #batch_per_device = batch_size*k // n_gpu if n_gpu > 1 else batch_size*k
         batch_per_device = batch_size // n_gpu if n_gpu > 1 else batch_size
@@ -235,7 +239,6 @@ def parse_test_args(cfg, mode="test"):
 
     elif mode == 'translate':
         # in multi-gpu, batch_size must be bigger than n_gpu!
-        n_gpu = 1 if use_cuda else 0
         logger.debug("Process device: %s, n_gpu: %d", device, n_gpu)
         eval_metrics = []
 
@@ -356,11 +359,11 @@ def test(cfg_file,
         if data_set is None:
             continue
 
+        file_name = cfg["data"][data_set_name]
         if task == "MT":
-            dataset_file = f'{cfg["data"][data_set_name]}.{cfg["data"]["src"]["lang"]}'
+            dataset_file = f'{file_name}.{cfg["data"]["src"]["lang"]}'
         elif task == "s2t":
-            root_path = Path(cfg["data"]["root_path"])
-            dataset_file = f'{root_path / cfg["data"][data_set_name]}.tsv'
+            dataset_file = f'{Path(cfg["data"]["root_path"]) / file_name}.tsv'
         logger.info("Decoding on %s set (%s)...", data_set_name, dataset_file)
         if isinstance(data_set, TranslationDataset):
             data_set.open_file()
@@ -431,9 +434,9 @@ def translate(cfg_file: str,
     :param n_best: amount of candidates to display
     """
 
-    def _translate_data(test_data):
+    def _translate_data(test_data, batch_size=1, batch_type="sentence"):
         """ Translates given dataset, using parameters from outer scope. """
-        _, _, _, _, _, hypotheses, _, _ = validate_on_data(
+        _, _, _, hypotheses, _, _ = validate_on_data(
             model=model, data=test_data, batch_size=batch_size,
             batch_type=batch_type, max_output_length=max_output_length,
             eval_metrics=[], compute_loss=False, beam_size=beam_size,
@@ -472,7 +475,9 @@ def translate(cfg_file: str,
     task, normalization = parse_test_args(cfg, mode="translate")
 
     # build model and load parameters into it
-    model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
+    model = build_model(cfg["model"],
+                        src_vocab=src_vocab if task == "MT" else None,
+                        trg_vocab=trg_vocab)
 
     # load model state from disk
     model_checkpoint = load_checkpoint(ckpt, device=device)
@@ -481,6 +486,7 @@ def translate(cfg_file: str,
     if device.type == "cuda":
         model.to(device)
 
+    kwargs = {}
     if task == "MT":
         src_tokenizer = build_tokenizer(data_cfg, "src")
         src_padding = partial(src_vocab.sentences_to_ids, bos=False, eos=True)
@@ -490,14 +496,20 @@ def translate(cfg_file: str,
                               root_path=Path(data_cfg["root_path"]),
                               embed_size=data_cfg["src"]["num_freq"],
                               pad_index=trg_vocab.pad_index) # no src_vocab
-    test_data = MonoDataset(task=task, src_tokenizer=src_tokenizer,
-                            src_padding=src_padding)
+        if "cmvn" in data_cfg.keys():
+            kwargs["cmvn"] = CMVN(**data_cfg["cmvn"])
+    trg_tokenizer = build_tokenizer(data_cfg, "trg")
+    test_data = MonoDataset(task=task,
+                            src_tokenizer=src_tokenizer,
+                            trg_tokenizer=trg_tokenizer,
+                            src_padding=src_padding,
+                            **kwargs)
 
     if not sys.stdin.isatty():
         # input stream given
         for line in sys.stdin.readlines():
             test_data.set_item(line.rstrip())
-        all_hypotheses = _translate_data(test_data)
+        all_hypotheses = _translate_data(test_data, batch_size, batch_type)
         assert len(all_hypotheses) == len(test_data) * n_best
 
         if output_path is not None:
@@ -532,14 +544,15 @@ def translate(cfg_file: str,
         while True:
             try:
                 prompt_str = "a source sentence" if task == "MT" else \
-                    "audio file name (relative to `root_path` in config)"
+                    'audio file name: (relative to `root_path` in config; ' \
+                    'either "mp3", "wav" or "npy")'
                 src_input = input(f"\nPlease enter {prompt_str}:\n")
                 if not src_input.strip():
                     break
 
                 # every line has to be made into dataset
                 test_data.set_item(src_input.rstrip())
-                hypotheses = _translate_data(test_data)
+                hypotheses = _translate_data(test_data, batch_size, batch_type)
 
                 print("JoeyNMT: Hypotheses ranked by score")
                 for i, hyp in enumerate(hypotheses):

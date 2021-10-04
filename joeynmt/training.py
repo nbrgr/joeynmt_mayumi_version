@@ -520,7 +520,9 @@ class TrainManager:
 
                         # validate on the entire dev set
                         if self.stats.steps % self.validation_freq == 0:
-                            if valid_data.random_subset > 0: # sample random subset
+                            # sample random subset to speedup validation process
+                            if valid_data is not None and \
+                                    valid_data.random_subset > 0:
                                 valid_data.sample_random_subset(seed=self.stats.steps)
                             valid_duration = self._validate(valid_data, epoch_no)
                             total_valid_duration += valid_duration

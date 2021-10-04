@@ -8,16 +8,20 @@ from pathlib import Path
 import sys
 from typing import Callable, List, Optional, Tuple, Union
 
+import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import BatchSampler, DataLoader, Dataset, \
     RandomSampler, Sampler, SequentialSampler
+import torchaudio
+
 from joeynmt.batch import Batch, SpeechBatch
 from joeynmt.constants import PAD_ID
 from joeynmt.data_augmentation import SpecAugment, CMVN
 from joeynmt.helpers import ConfigurationError, log_data_info, \
     read_list_from_file, write_list_to_file
-from joeynmt.helpers_for_audio import SpeechInstance, pad_features, remove_punc
+from joeynmt.helpers_for_audio import SpeechInstance, get_n_frames, \
+    pad_features, remove_punc
 from joeynmt.tokenizers import BasicTokenizer, SentencePieceTokenizer, \
     build_tokenizer
 from joeynmt.vocabulary import Vocabulary, build_vocab
@@ -256,6 +260,7 @@ def collate_fn(batch, task, src_process, trg_process, pad_index, device,
         trg, trg_length = None, None
     else:
         assert all(t is not None for t in trg_list), trg_list
+        assert trg_process is not None
         trg, trg_length = trg_process(trg_list, bos=True, eos=True)
 
     if task == "MT":
@@ -326,7 +331,8 @@ def make_data_iter(dataset: Dataset,
                                           drop_last=False)
 
     assert dataset.padding['src'] is not None
-    assert dataset.padding['trg'] is not None
+    if dataset.has_trg:
+        assert dataset.padding['trg'] is not None
 
     # data iterator
     return DataLoader(dataset,
@@ -334,7 +340,7 @@ def make_data_iter(dataset: Dataset,
                       collate_fn=partial(collate_fn,
                                          task=dataset.task,
                                          src_process=dataset.padding['src'],
-                                         trg_process=dataset.padding['trg'],
+                                         trg_process=dataset.padding['trg'] if dataset.has_trg else None,
                                          pad_index=pad_index,
                                          device=device,
                                          normalization=normalization,
@@ -453,7 +459,8 @@ class TsvDataset(Dataset):
         assert idx in self.cache, (idx, self.cache)
         return src_n_tokens, trg_n_tokens
 
-    def __getitem__(self, idx: int) -> Tuple[List[str], Optional[List[str]]]:
+    def __getitem__(self, idx: int) -> Tuple[List[Union[str, SpeechInstance]],
+                                             Optional[List[str]]]:
         # pass through
         assert idx in self.cache, (idx, self.cache)
         src, trg = self.cache[idx]
@@ -461,7 +468,7 @@ class TsvDataset(Dataset):
         return src, trg
 
     def get_raw_texts(self) -> Tuple[None, List[str]]:
-        trg_list = self.df['trg'].to_list()
+        trg_list = self.df['trg'].to_list() if self.has_trg else []
         if self.tokenizer['trg'] is not None:
             trg_list = [self.tokenizer['trg'].pre_process(x) for x in trg_list]
         return (None, trg_list)
@@ -630,15 +637,18 @@ class MonoDataset(Dataset):
     :param src_tokenizer: tokenizer for src
     :param src_padding: padding function for src
     """
-    def __init__(self, task: str = "MT", src_tokenizer: BasicTokenizer = None,
-                 src_padding: Callable = None):
+    def __init__(self, task: str = "MT",
+                 src_tokenizer: BasicTokenizer = None,
+                 trg_tokenizer: BasicTokenizer = None,
+                 src_padding: Callable = None,
+                 **kwargs):
         self.task = task
         assert task in ["MT", "s2t"]
         self.is_train = False
         self.has_trg = False
 
         # tokenizer
-        self.tokenizer = {'src': src_tokenizer}
+        self.tokenizer = {'src': src_tokenizer, 'trg': trg_tokenizer}
 
         # filter by length
         self.max_len = {'src': -1} # no cut-off
@@ -646,6 +656,10 @@ class MonoDataset(Dataset):
 
         # padding func: will be assigned after vocab is built
         self.padding = {'src': src_padding}
+
+        # data augmentation
+        self.specaugment = None
+        self.cmvn = kwargs.get("cmvn", None)
 
         # place holder
         self.cache = {}
@@ -664,14 +678,27 @@ class MonoDataset(Dataset):
         if self.task == "MT":
             item = self.tokenizer['src'](line, sample=False)
         elif self.task == "s2t":
-            assert Path(line).is_file()
-            item = SpeechInstance(fbank_path=line, n_frames=None, idx=idx)
+            path = self.padding["src"].keywords["root_path"] / line
+            assert path.is_file(), f"file {path} not found."
+            n_frames = None
+            if path.suffix in [".mp3", ".wav"]:
+                meta = torchaudio.info(path.as_posix())
+                n_frames = get_n_frames(meta.num_frames, meta.sample_rate)
+            elif path.suffix in [".npy"]:
+                n_frames = int(np.load(path.as_posix()).shape[0])
+            item = SpeechInstance(fbank_path=line, n_frames=n_frames, idx=idx)
         self.cache[idx] = (item, None)
 
     def cache_item_pair(self, idx: int) -> int:
         # pass through
         assert idx in self.cache
         return len(self.cache[idx][0]), 0
+
+    def __getitem__(self, idx: int) -> Tuple[List[Union[str, SpeechInstance]], None]:
+        # pass through
+        assert idx in self.cache, (idx, self.cache)
+        src, trg = self.cache[idx]
+        return src, None
 
     def __len__(self) -> int:
         return len(self.cache)
