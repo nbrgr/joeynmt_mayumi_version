@@ -167,7 +167,7 @@ def validate_on_data(model: Model,
                                                         cut_at_eos=True)
 
     # evaluate with metric on full dataset
-    valid_sources, valid_references = data.get_raw_texts()
+    valid_sources, valid_references = data.get_raw_texts() if data.task == "MT" else None, None
     valid_hypotheses = [data.tokenizer['trg'].post_process(t) # un-bpe-ing
                         for t in decoded_valid]
 
