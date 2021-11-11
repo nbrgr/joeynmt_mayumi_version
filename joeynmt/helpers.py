@@ -126,7 +126,8 @@ def subsequent_mask(size: int) -> Tensor:
     :return: Tensor with 0s and 1s of shape (1, size, size)
     """
     ones = torch.ones(size, size, dtype=torch.bool)
-    return torch.tril(ones, out=ones).unsqueeze(0)
+    ret = torch.tril(ones, out=ones)
+    return ret.unsqueeze(0)
 
 
 def set_seed(seed: int) -> None:
@@ -212,27 +213,6 @@ def read_list_from_file(input_path: Path) -> List[str]:
     """
     return [line.rstrip("\n") for line in
             input_path.read_text(encoding='utf-8').splitlines()]
-
-
-def bpe_postprocess(string, bpe_type="subword-nmt") -> str:
-    """
-    Post-processor for BPE output. Recombines BPE-split tokens.
-
-    :param string:
-    :param bpe_type: one of {"sentencepiece", "subword-nmt"}
-    :return: post-processed string
-    """
-    if bpe_type == "sentencepiece":
-        ret = string.replace(" ", "").replace("▁", " ").strip()
-    elif bpe_type == "subword-nmt":
-        # Remove merge markers within the sentence.
-        ret = string.replace("@@ ", "").strip()
-        # Remove final merge marker.
-        if ret.endswith("@@"):
-            ret = ret[:-2]
-    else:
-        ret = string.strip()
-    return ret
 
 
 def store_attention_plots(attentions: np.ndarray,
@@ -426,13 +406,29 @@ def symlink_update(target: Path, link_name: Path) -> Optional[Path]:
 
 
 def lengths_to_padding_mask(lens: torch.Tensor) -> torch.BoolTensor:
+    """
+    get padding mask according to the given lengths
+
+    :param lens: length list in shape (batch_size, 1)
+    :return:
+    """
     bsz, max_lens = lens.size(0), torch.max(lens).item()
     mask = torch.arange(max_lens).to(lens.device).view(1, max_lens)
     mask = mask.expand(bsz, -1) >= lens.view(bsz, 1).expand(-1, max_lens)
     return ~mask
 
 
-def pad(x, max_len, pad_index, dim=1):
+def pad(x: torch.Tensor, max_len: int, pad_index: int, dim: int=1) \
+        -> torch.Tensor:
+    """
+    pad tensor
+
+    :param x: tensor in shape (batch_size, seq_len, *)
+    :param max_len: max_length
+    :param pad_index: index of the pad token
+    :param dim: dimension to pad
+    :return: padded tensor
+    """
     if dim == 1:
         batch_size, seq_len, _ = x.size()
         offset = max_len - seq_len
@@ -451,6 +447,7 @@ def flatten(array: List[List[Any]]) -> List[Any]:
     """
     flatten a nested 2D list. faster even with a very long array than
     [item for subarray in array for item in subarray] or newarray.extend().
+
     :param array: a nested list
     :return: flattened list
     """
@@ -462,6 +459,7 @@ def align_words_to_bpe(bpe_tokens: List[str], word_tokens: List[str],
                        bpe_type="sentencepiece", start=1) -> List[List[int]]:
     """
     align BPE to word tokenization formats.
+
     :params bpe_tokens: list of BPE tokens
     :params word_tokens: list of word tokens
     :return: mapping from *word_tokens* to corresponding *bpe_tokens*.

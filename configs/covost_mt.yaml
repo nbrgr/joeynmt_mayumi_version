@@ -3,11 +3,11 @@ joeynmt_version: 1.4
 
 data:
     task: "MT"
-    train: "/scratch5t/ohta/covost/en/train"
-    dev: "/scratch5t/ohta/covost/en/dev"
-    test: "/scratch5t/ohta/covost/en/test"
+    train: "/scratch5t/ohta/covost/de/train"
+    dev: "/scratch5t/ohta/covost/de/dev"
+    test: "/scratch5t/ohta/covost/de/test"
     src:
-        lang: "en"
+        lang: "de"
         level: "bpe"
         tokenizer: "sentencepiece"
         lowercase: True

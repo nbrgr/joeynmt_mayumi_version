@@ -24,7 +24,7 @@ from joeynmt.batch import Batch
 from joeynmt.builders import build_gradient_clipper, build_optimizer, \
     build_scheduler
 from joeynmt.data import TsvDataset, TranslationDataset, load_data, make_data_iter
-from joeynmt.helpers import delete_ckpt, load_checkpoint, load_config, \
+from joeynmt.helpers import ConfigurationError, delete_ckpt, load_checkpoint, load_config, \
     log_cfg, make_logger, make_model_dir, set_seed, store_attention_plots, \
     symlink_update, write_list_to_file
 from joeynmt.model import Model, _DataParallel, build_model

@@ -20,8 +20,7 @@ from audiodata_utils import build_sp_model, create_zip, get_zip_manifest, \
     load_tsv, save_tsv
 
 from joeynmt.helpers import write_list_to_file
-from joeynmt.helpers_for_audio import extract_fbank_features, get_n_frames, \
-    remove_punc
+from joeynmt.helpers_for_audio import extract_fbank_features, remove_punc
 
 
 COLUMNS = ["id", "src", "n_frames", "trg", "speaker"]
@@ -43,14 +42,19 @@ class LIBRISPEECH(LIBRISPEECH_torchaudio):
         "test-clean",
         "test-other",
     ]
+    FEATURE_ROOT = f"fbank{N_MEL_FILTERS}"
 
     def __init__(self,
                  root: Path,
                  split: str = "train-clean-100",
                  download: bool = False):
         super().__init__(root, split, FOLDER_IN_ARCHIVE, download)
-        self.return_wav = True
-        self.return_utt = True
+        self.root = root
+
+        # return flags
+        self.return_utt = True  # whether to parse text files
+        self.return_wav = True  # whether to call torchaudio.load()
+        self.return_npy = False # whether to call np.load()
 
     def _load_text(self, text_file, file_id):
         with text_file.open("r") as ft:
@@ -63,31 +67,30 @@ class LIBRISPEECH(LIBRISPEECH_torchaudio):
                 raise FileNotFoundError("Translation not found for " + file_id)
         return utterance
 
-    def __getitem__(self, n: int) -> Tuple[Tensor, int, int, str, str, str]:
+    def __getitem__(self, n: int) -> Tuple[Tensor, int, np.ndarray, str, str, str]:
         file_id = self._walker[n]
         spk_id, cpt_id, utt_no = file_id.split("-")
         utt_id = f"{spk_id}-{cpt_id}-{int(utt_no)}"
         path = Path(self._path)
 
+        waveform, sample_rate, npy, utt = None, None, None, None
+
         if self.return_utt:
             text_file = (path / spk_id / cpt_id
                          / f"{spk_id}-{cpt_id}").with_suffix(self._ext_txt)
             utt = self._load_text(text_file, file_id)
-        else:
-            utt = None
 
-        audio_file = (path / spk_id / cpt_id
-                      / file_id).with_suffix(self._ext_audio)
+        if self.return_npy:
+            npy_path = self.root / self.FEATURE_ROOT / f'{utt_id}.npy'
+            assert npy_path.is_file()
+            npy = np.load(npy_path.as_posix())
+
         if self.return_wav:
-            waveform, sample_rate = torchaudio.load(audio_file.as_posix())
-            n_frames = get_n_frames(waveform.size(1), sample_rate)
-        else:
-            waveform = None
-            meta = torchaudio.load(audio_file.as_posix())
-            sample_rate = meta.sample_rate
-            n_frames = get_n_frames(meta.num_frames - 1152, sample_rate)
+            audio_path = (path / spk_id / cpt_id
+                          / file_id).with_suffix(self._ext_audio)
+            waveform, sample_rate = torchaudio.load(audio_path.as_posix())
 
-        return waveform, sample_rate, n_frames, utt, spk_id, utt_id
+        return waveform, sample_rate, npy, utt, spk_id, utt_id
 
 
 def process(output_root):
@@ -95,7 +98,7 @@ def process(output_root):
     out_root.mkdir(exist_ok=True)
 
     # feature_root across splits
-    feature_root = out_root / f"fbank{N_MEL_FILTERS}"
+    feature_root = out_root / LIBRISPEECH.FEATURE_ROOT
     feature_root.mkdir(exist_ok=True)
 
     # Extract features
@@ -103,25 +106,25 @@ def process(output_root):
     for split in LIBRISPEECH.SPLITS:
         print(f"Fetching split {split}...")
         datasets[split] = LIBRISPEECH(out_root, split=split, download=True)
+        """
         datasets[split].return_utt = False  # a bit faster...
         print(f"Extracting log mel filter bank features...")
-        for i, (waveform, sample_rate, n_frames, _, _, utt_id) \
-                in enumerate(tqdm(datasets[split])):
+        for i, (wav, sr, _, _, _, utt_id) in enumerate(tqdm(datasets[split])):
             try:
-                extract_fbank_features(waveform, sample_rate, n_frames, utt_id,
-                                       feature_root=feature_root,
+                extract_fbank_features(waveform=wav,
+                                       sample_rate=sr,
+                                       output_path=(feature_root / f'{utt_id}.npy'),
                                        n_mel_bins=N_MEL_FILTERS,
                                        overwrite=False)
             except Exception as e:
                 print(i, e)
-    
+
     # Pack features into ZIP
     print("ZIPing features...")
     create_zip(feature_root, feature_root.with_suffix(".zip"))
+    """
     print("Fetching ZIP manifest...")
-    #zip_manifest = get_zip_manifest(feature_root.with_suffix(".zip"))
-    zip_manifest = get_zip_manifest(feature_root.with_suffix(".zip"),
-                                    npy_root=feature_root)
+    zip_manifest = get_zip_manifest(feature_root.with_suffix(".zip"))
     
     # Generate TSV manifest
     print("Generating manifest...")
@@ -129,10 +132,13 @@ def process(output_root):
     with tqdm(total=len(zip_manifest)) as pbar:
         for split, dataset in datasets.items():
             dataset.return_wav = False  # a bit faster...
-            for _, _, n_frames, utt, spk_id, utt_id in dataset:
+            dataset.return_npy = True
+            dataset.return_utt = True
+            for _, _, npy, utt, spk_id, utt_id in dataset:
+                assert npy is not None and npy.shape[0] > 0
                 record = {"id": utt_id,
                           "src": zip_manifest[utt_id],
-                          "n_frames": n_frames,
+                          "n_frames": npy.shape[0],
                           "trg": utt.lower() if LOWERCASE else utt,
                           "split": split,
                           "speaker": spk_id}
@@ -172,7 +178,7 @@ def process(output_root):
                 out_filename = split
             #df["trg"] = df["trg"].apply(
             #    lambda x: ' '.join(spm.encode(x.lower(), out_type=str)))
-            tsv_file = out_root / f"{out_filename}_spm{vocab_size}.tsv"
+            tsv_file = out_root / f"joey_{out_filename}.tsv"
             save_tsv(df[COLUMNS], tsv_file)
             print(f'\t{tsv_file} saved.')
     print('done!')

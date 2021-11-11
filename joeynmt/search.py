@@ -221,6 +221,9 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
     att_vectors = None  # not used for Transformer
     hidden = None  # not used for Transformer
     trg_mask = None  # not used for RNN
+    ctc_output = None # place holder for ctc decoding
+    ctc_decoding = model.ctc_beam_decoder is not None
+    ctc_beam_outputs = None # return value
 
     # Recurrent models only: initialize RNN hidden state
     if not transformer:
@@ -299,8 +302,8 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
             # logits: logits for final softmax
             with torch.no_grad():
                 # pylint: disable=unused-variable
-                nll_logits, _, _, _ = model(
-                    return_type="decode",
+                nll_logits, _, _, ctc_output = model(
+                    return_type="decode_ctc" if ctc_decoding else "decode",
                     encoder_output=encoder_output,
                     encoder_hidden=None, # only for initializing decoder_hidden
                     src_mask=src_mask,
@@ -456,7 +459,12 @@ def beam_search(model: Model, size: int, encoder_output: Tensor,
     final_outputs = pad_and_stack_hyps(
         [u.cpu().numpy() for r in results["predictions"] for u in r],
         pad_value=pad_index)
-    return final_outputs, None
+
+    import pdb; pdb.set_trace()
+    if ctc_decoding and torch.is_tensor(ctc_output):
+        # (beam_results, beam_scores, timesteps, out_lens)
+        ctc_beam_outputs = model.ctc_beam_decoder.decode(ctc_output)
+    return final_outputs, ctc_beam_outputs
 
 
 def run_batch(model: Model, batch: Batch, max_output_length: int,

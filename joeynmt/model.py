@@ -35,7 +35,8 @@ class Model(nn.Module):
                  src_embed: Embeddings,
                  trg_embed: Embeddings,
                  src_vocab: Vocabulary,
-                 trg_vocab: Vocabulary) -> None:
+                 trg_vocab: Vocabulary,
+                 ctc_beam_decoder = None) -> None:
         """
         Create a new encoder-decoder model
 
@@ -59,6 +60,8 @@ class Model(nn.Module):
         self.eos_index = self.trg_vocab.eos_index
         self.unk_index = self.trg_vocab.unk_index
         self._loss_function = None # set by the TrainManager
+
+        self.ctc_beam_decoder = ctc_beam_decoder
 
     @property
     def loss_function(self):
@@ -342,9 +345,30 @@ def build_model(cfg: dict = None,
             **cfg["decoder"], encoder=encoder, vocab_size=len(trg_vocab),
             emb_size=trg_embed.embedding_dim, emb_dropout=dec_emb_dropout)
 
+    # construct ctc beam decoder
+    ctc_beam_decoder = None
+    if "ctc_beam_decoder" in cfg:
+        try:
+            from ctcdecode import CTCBeamDecoder
+            ctc_beam_decoder = CTCBeamDecoder(
+                trg_vocab._itos,
+                model_path=cfg["ctc_beam_decoder"].get("model_path", None),
+                alpha=cfg["ctc_beam_decoder"].get("alpha", 0),
+                beta=cfg["ctc_beam_decoder"].get("beta", 0),
+                cutoff_top_n=cfg["ctc_beam_decoder"].get("cutoff_top_n", 40),
+                cutoff_prob=cfg["ctc_beam_decoder"].get("cutoff_prob", 1.0),
+                beam_width=cfg["ctc_beam_decoder"].get("beam_search", 100),
+                num_processes=cfg["ctc_beam_decoder"].get("num_processes", 1),
+                blank_id=trg_vocab.bos_index,
+                log_probs_input=False
+            )
+        except Exception as e:
+            logger.info("Please install `ctcdecode` python library to enable ctc decoding.")
+
     model = Model(encoder=encoder, decoder=decoder,
                   src_embed=src_embed, trg_embed=trg_embed,
-                  src_vocab=src_vocab, trg_vocab=trg_vocab)
+                  src_vocab=src_vocab, trg_vocab=trg_vocab,
+                  ctc_beam_decoder=ctc_beam_decoder)
 
     # tie softmax layer with trg embeddings
     if cfg.get("tied_softmax", False):

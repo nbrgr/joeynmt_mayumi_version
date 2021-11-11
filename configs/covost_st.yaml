@@ -3,32 +3,33 @@ joeynmt_version: 1.4
 
 data:
     task: "s2t"
-    root_path: "/scratch5t/ohta/covost/en/"
+    root_path: "/scratch5t/ohta/covost/de/"
     train: "joey_st_train"
     dev: "joey_st_dev"
     test: "joey_st_test"
     dev_random_subset: 2000 # in order to speed up the validation in the training loop
     src:
+        lang: "de"
         num_freq: 80
         max_length: 3000
     trg:
-        lang: "de"
+        lang: "en"
         level: "bpe"
         tokenizer: "sentencepiece" # called "bpe_type" in version<=1.3
         lowercase: False
         remove_punctuation: False
         max_length: 100 # called "max_sent_length" in version<=1.3
         voc_min_freq: 1
-        voc_limit: 7000
-        voc_file: "/scratch5t/ohta/covost/en/spm_bpe7000.tsv" # called "trg_vocab" in version<=1.3
+        voc_limit: 8000
+        voc_file: "/scratch5t/ohta/covost/de/spm_bpe8000.tsv" # called "trg_vocab" in version<=1.3
         spm:
-            model_file: "/scratch5t/ohta/covost/en/spm_bpe7000.model"  # sentence piece model path
+            model_file: "/scratch5t/ohta/covost/de/spm_bpe8000.model"  # sentence piece model path
             enable_sampling: False         # whether to enable BPE dropout
     specaugment:
-        freq_mask_n: 2
-        freq_mask_f: 27
-        time_mask_n: 2
-        time_mask_t: 40
+        freq_mask_n: 1
+        freq_mask_f: 18
+        time_mask_n: 1
+        time_mask_t: 20
         time_mask_p: 1.0
     cmvn:
         norm_means: True
@@ -44,8 +45,8 @@ testing:
 
 training:
     load_model: "/scratch12t/ohta/models/covost2_ende_st_seed789_resume1/latest.ckpt"
-    #load_encoder: "/scratch12t/ohta/models/covost2_en_asr_seed789_resume3/30000.ckpt"
-    #load_decoder: "/scratch12t/ohta/models/covost2_ende_mt_seed789/65000.ckpt"
+    load_encoder: "/scratch12t/ohta/models/covost2_en_asr_seed789_resume3/30000.ckpt"
+    load_decoder: "/scratch12t/ohta/models/covost2_ende_mt_seed789/65000.ckpt"
     reset_best_ckpt: False
     reset_scheduler: False
     reset_optimizer: False
