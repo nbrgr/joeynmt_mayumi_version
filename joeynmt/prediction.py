@@ -273,6 +273,7 @@ def parse_test_args(cfg, mode="test"):
     decoding_description = "Greedy decoding" if beam_size < 2 else \
         f"Beam search decoding with beam size = {beam_size} " \
         f"and alpha = {beam_alpha}"
+
     tokenizer_info = sacrebleu['tokenize'] \
         if "bleu" in eval_metrics or "wer" in eval_metrics else ""
 
@@ -415,7 +416,6 @@ def test(cfg_file,
             write_list_to_file(output_path_set, hypotheses)
             logger.info("Translations saved to: %s.", output_path_set)
 
-
 def translate(cfg_file: str,
               ckpt: str = None,
               output_path: str = None,
@@ -556,7 +556,7 @@ def translate(cfg_file: str,
 
                 print("JoeyNMT: Hypotheses ranked by score")
                 for i, hyp in enumerate(hypotheses):
-                    print("JoeyNMT #{}: {}".format(i + 1, hyp))
+                    print(f"JoeyNMT #{i+1}: {hyp}")
 
             except (KeyboardInterrupt, EOFError):
                 print("\nBye.")

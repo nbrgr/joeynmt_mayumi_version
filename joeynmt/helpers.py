@@ -103,7 +103,7 @@ def log_cfg(cfg: Dict, prefix: str = "cfg") -> None:
             log_cfg(v, prefix=p)
         else:
             p = '.'.join([prefix, k])
-            logger.info("{:34s} : {}".format(p, v))
+            logger.info("%34s : %s", p, v)
 
 
 def clones(module: nn.Module, n: int) -> nn.ModuleList:
@@ -274,7 +274,7 @@ def store_attention_plots(attentions: np.ndarray,
                                    row_labels=src,
                                    output_path=None,
                                    dpi=50)
-                tb_writer.add_figure("attention/{}.".format(i),
+                tb_writer.add_figure(f"attention/{i}.",
                                      fig,
                                      global_step=steps)
         except Exception:   # pylint: disable=broad-except
@@ -301,7 +301,7 @@ def get_latest_checkpoint(ckpt_dir: Path) -> Optional[Path]:
     # check existence
     if latest_checkpoint is None:
         raise FileNotFoundError(
-            "No checkpoint found in directory {}.".format(ckpt_dir))
+            f"No checkpoint found in directory {ckpt_dir}.")
     return latest_checkpoint
 
 

@@ -1,6 +1,5 @@
 # &nbsp; ![Joey-NMT](joey-small.png) Joey NMT
-[![Build Status](https://travis-ci.com/joeynmt/joeynmt.svg?branch=master)](https://travis-ci.org/joeynmt/joeynmt)
-[![Gitter](https://badges.gitter.im/joeynmt/community.svg)](https://gitter.im/joeynmt/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+[![Build Status](https://travis-ci.com/joeynmt/joeynmt.svg?branch=main)](https://travis-ci.org/joeynmt/joeynmt)
 
 ## Goal and Purpose
 :koala: Joey NMT framework is developed for educational purposes.
@@ -23,10 +22,7 @@ Check out the detailed [documentation](https://joeynmt.readthedocs.io) and our [
 ## Contributors
 Joey NMT was initially developed and is maintained by [Jasmijn Bastings](https://github.com/bastings) (University of Amsterdam) and [Julia Kreutzer](https://juliakreutzer.github.io/) (Heidelberg University), now both at Google Research. [Mayumi Ohta](https://www.cl.uni-heidelberg.de/statnlpgroup/members/ohta/) at Heidelberg University is continuing the legacy.
 
-### Hall of Fame
 Welcome to our new contributors :hearts:, please don't hesitate to open a PR or an issue if there's something that needs improvement!
-
-[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/0)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/0)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/1)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/1)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/2)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/2)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/3)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/3)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/4)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/4)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/5)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/5)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/6)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/6)[![](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/images/7)](https://sourcerer.io/fame/joeynmt/joeynmt/joeynmt/links/7)
 
 ## Features
 Joey NMT implements the following features (aka the minimalist toolkit of NMT :wrench:):
@@ -49,13 +45,13 @@ In order to keep the code clean and readable, we make use of:
 Travis CI runs the tests and pylint on every push to ensure the repository stays clean.
 
 ## Installation
-Joey NMT is built on [PyTorch](https://pytorch.org/) and [torchtext](https://github.com/pytorch/text) for Python >= 3.5.
+Joey NMT is built on [PyTorch](https://pytorch.org/) and [torchtext](https://github.com/pytorch/text) for Python >= 3.7.
 
 A. [*Now also directly with pip!*](https://pypi.org/project/joeynmt/)
   `pip install joeynmt`
   
-  If you want to use GPUs add: `pip install torch==1.8.0+cu101 -f https://download.pytorch.org/whl/torch_stable.html`, for CUDA v10.1.
-  You'll need this in particular when working on Google Colab.
+  If you want to use GPUs add: `pip install torch==1.10.0+cu102 -f https://download.pytorch.org/whl/torch_stable.html`, for CUDA v10.2.
+  You'll need this in particular when working on Google Colab (if it doesn't already have the right Torch version installed).
   
 B. From source
   1. Clone this repository:
@@ -66,7 +62,7 @@ B. From source
   3. Run the unit tests:
   `python3 -m unittest`
 
-**Warning!** When running on *GPU* you need to manually install the suitable PyTorch version (1.8.0) for your [CUDA](https://developer.nvidia.com/cuda-zone) version. This is described in the [PyTorch installation instructions](https://pytorch.org/get-started/locally/).
+**Warning!** When running on *GPU* you need to manually install the suitable PyTorch version (1.10.0) for your [CUDA](https://developer.nvidia.com/cuda-zone) version. This is described in the [PyTorch installation instructions](https://pytorch.org/get-started/locally/).
 
 
 ## Usage
@@ -203,13 +199,13 @@ Benchmark results on WMT and IWSLT datasets are reported [here](benchmarks.md). 
 Pre-trained models from reported benchmarks for download (contains config, vocabularies, best checkpoint and dev/test hypotheses):
 
 ### IWSLT14 de-en
-Pre-processing with Moses decoder tools as in [this script](https://github.com/joeynmt/joeynmt/blob/master/scripts/get_iwslt14_bpe.sh).
+Pre-processing with Moses decoder tools as in [this script](https://github.com/joeynmt/joeynmt/blob/main/scripts/get_iwslt14_bpe.sh).
 
 - [IWSLT14 de-en BPE RNN](https://www.cl.uni-heidelberg.de/statnlpgroup/joeynmt/iwslt14-deen-bpe.tar.gz) (641M)
 - [IWSLT14 de-en Transformer](https://www.cl.uni-heidelberg.de/statnlpgroup/joeynmt/transformer_iwslt14_deen_bpe.tar.gz) (210M)
 
 ### IWSLT15 en-vi
-The data came preprocessed from Stanford NLP, see [this script](https://github.com/joeynmt/joeynmt/blob/master/scripts/get_iwslt15_envi.sh).
+The data came preprocessed from Stanford NLP, see [this script](https://github.com/joeynmt/joeynmt/blob/main/scripts/get_iwslt15_envi.sh).
 
 - [IWSLT15 en-vi Transformer](https://www.cl.uni-heidelberg.de/statnlpgroup/joeynmt/transformer_iwslt15_envi.tar.gz) (186M)
 
@@ -246,12 +242,13 @@ Since this codebase is supposed to stay clean and minimalistic, contributions ad
 - resolving issues
 - providing pre-trained models
 
-Code extending the functionalities beyond the basics will most likely not end up in the master branch, but we're curions to learn what you used Joey NMT for.
+Code extending the functionalities beyond the basics will most likely not end up in the main branch, but we're curions to learn what you used Joey NMT for.
 
 ## Projects and Extensions
 Here we'll collect projects and repositories that are based on Joey NMT, so you can find inspiration and examples on how to modify and extend the code.
 - 🕸️**Masakhane Web**. [@CateGitau](https://github.com/categitau), [@Kabongosalomon](https://github.com/Kabongosalomon), [@vukosim](https://github.com/vukosim) and team built a whole web translation platform for the African NMT models that Masakhane built with Joey NMT. The best is: it's completely open-source, so anyone can contribute new models or features. Try it out [here](http://translate.masakhane.io/), and check out the [code](https://github.com/dsfsi/masakhane-web).
 - ⚙️ **MutNMT**. [@sjarmero](https://github.com/sjarmero) created a web application to train NMT: it lets the user train, inspect, evaluate and translate with Joey NMT --- perfect for NMT newbies! Code [here](https://github.com/Prompsit/mutnmt). The tool was developed by [Prompsit](https://www.prompsit.com/) in the framework of the European project [MultiTraiNMT](http://www.multitrainmt.eu/).
+- 🌟**Cantonese-Mandaring Translator**. [@evelynkyl](https://github.com/evelynkyl/) trained different NMT models for translating between the low-resourced Catonese and Mandarin,  with the help of some cool parallel sentence mining tricks! Check out her work [here](https://github.com/evelynkyl/yue_nmt).
 - 📖 **Russian-Belarusian Translator**. [@tsimafeip](https://github.com/tsimafeip) built a translator from Russian to Belarusian and adapted it to legal and medical domains. The code can be found [here](https://github.com/tsimafeip/Translator/).
 - :muscle: **Reinforcement Learning**. [@samuki](https://github.com/samuki/) implemented various policy gradient variants in Joey NMT: here's the [code](https://github.com/samuki/reinforce-joey), could the logo be any more perfect? :muscle: :koala:
 - :hand: **Sign Language Translation**. [@neccam](https://github.com/neccam/) built a sign language translator that continuosly recognizes sign language and translates it. Check out the [code](https://github.com/neccam/slt) and the [CVPR 2020 paper](https://openaccess.thecvf.com/content_CVPR_2020/html/Camgoz_Sign_Language_Transformers_Joint_End-to-End_Sign_Language_Recognition_and_Translation_CVPR_2020_paper.html)!
@@ -263,7 +260,6 @@ Here we'll collect projects and repositories that are based on Joey NMT, so you 
 - :globe_with_meridians: **Flask Joey**. [@kevindegila](https://github.com/kevindegila) built a [flask interface to Joey](https://github.com/kevindegila/flask-joey), so you can deploy your trained model in a web app and query it in the browser. 
 - :busts_in_silhouette: **User Study**. We evaluated the code quality of this repository by testing the understanding of novices through quiz questions. Find the details in Section 3 of the [Joey NMT paper](https://arxiv.org/abs/1907.12484).
 - :pencil: **Self-Regulated Interactive Seq2Seq Learning**. Julia Kreutzer and Stefan Riezler. Published at ACL 2019. [Paper](https://arxiv.org/abs/1907.05190) and [Code](https://github.com/juliakreutzer/joeynmt/tree/acl19). This project augments the standard fully-supervised learning regime by weak and self-supervision for a better trade-off of quality and supervision costs in interactive NMT.
-- :lips: **Speech Joey**. [@Sariyusha](https://github.com/Sariyusha) is giving Joey ears for speech translation. [Code](https://github.com/Sariyusha/speech_joey).
 - :camel: **Hieroglyph Translation**. Joey NMT was used to translate hieroglyphs in [this IWSLT 2019 paper](https://www.cl.uni-heidelberg.de/statnlpgroup/publications/IWSLT2019.pdf) by Philipp Wiesenbach and Stefan Riezler. They gave Joey NMT multi-tasking abilities. 
 
 If you used Joey NMT for a project, publication or built some code on top of it, let us know and we'll link it here.

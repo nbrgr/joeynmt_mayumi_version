@@ -198,9 +198,10 @@ class TrainManager:
             if 'apex' not in sys.modules:
                 raise ImportError("Please install apex from "
                                   "https://www.github.com/nvidia/apex "
-                                  "to use fp16 training.") from no_apex
-            self.model, self.optimizer = amp.initialize(self.model, self.optimizer,
-                                                    opt_level='O1')
+                                  "to use fp16 training.") from no_apex  # pylint: disable=used-before-assignment
+            self.model, self.optimizer = amp.initialize(self.model,
+                                                        self.optimizer,
+                                                        opt_level='O1')
             # opt level: one of {"O0", "O1", "O2", "O3"}
             # see https://nvidia.github.io/apex/amp.html#opt-levels
 
@@ -354,12 +355,17 @@ class TrainManager:
 
         if not reset_iter_state:
             # restore counters
+            assert 'train_iter_state' in model_checkpoint
             self.stats.steps = model_checkpoint["steps"]
             self.stats.total_tokens = model_checkpoint["total_tokens"]
             self.train_iter_state = model_checkpoint["train_iter_state"]
         else:
             # reset counters if explicitly 'train_iter_state: True' in config
             logger.info("Reset data iterator (random seed: {%d}).", self.seed)
+
+        # move parameters to cuda
+        if self.use_cuda:
+            self.model.to(self.device)
 
         # fp16
         if self.fp16 and model_checkpoint.get("amp_state", None) is not None:
@@ -680,7 +686,7 @@ class TrainManager:
                 attentions=valid_attention_scores,
                 targets=valid_hypotheses_raw,
                 sources=valid_data.tokenizer['src'](valid_sources) \
-                    if self.task== "MT" else None,
+                    if self.task == "MT" else None,
                 indices=self.log_valid_sents,
                 output_prefix=(self.model_dir / f"att.{self.stats.steps}"
                                ).as_posix(),
@@ -742,7 +748,6 @@ class TrainManager:
                 logger.info("\tSource:     %s", sources[p])
             logger.info("\tReference:  %s", references[p])
             logger.info("\tHypothesis: %s", hypotheses[p])
-
 
     class TrainStatistics:
         def __init__(self,
@@ -844,9 +849,11 @@ def train(cfg_file: str, skip_test: bool = False) -> None:
     if not skip_test:
         # predict with the best model on validation and test
         # (if test data is available)
+
         ckpt = model_dir / f"{trainer.stats.best_ckpt_iter}.ckpt"
         output_path = (model_dir
                        / "{:08d}.hyps".format(trainer.stats.best_ckpt_iter))
+
         datasets_to_test = {
             "dev": dev_data,
             "test": test_data,
