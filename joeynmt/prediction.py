@@ -14,12 +14,12 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from joeynmt.data import TranslationDataset, TsvDataset, MonoDataset, \
+from joeynmt.data import PlaintextDataset, TsvDataset, StreamDataset, \
     load_data, make_data_iter
 from joeynmt.data_augmentation import CMVN
-from joeynmt.helpers import bpe_postprocess, expand_reverse_index, \
-    load_checkpoint, load_config, make_logger, read_list_from_file, \
-    resolve_ckpt_path, store_attention_plots, write_list_to_file
+from joeynmt.helpers import expand_reverse_index, load_checkpoint, \
+    load_config, make_logger, read_list_from_file, resolve_ckpt_path, \
+    store_attention_plots, write_list_to_file
 from joeynmt.helpers_for_audio import pad_features
 from joeynmt.metrics import bleu, chrf, sequence_accuracy, token_accuracy, wer
 from joeynmt.model import Model, _DataParallel, build_model
@@ -366,7 +366,7 @@ def test(cfg_file,
         elif task == "s2t":
             dataset_file = f'{Path(cfg["data"]["root_path"]) / file_name}.tsv'
         logger.info("Decoding on %s set (%s)...", data_set_name, dataset_file)
-        if isinstance(data_set, TranslationDataset):
+        if data_set.online_load and hasattr(data_set, 'open_file'):
             data_set.open_file()
 
         # pylint: disable=unused-variable
@@ -379,7 +379,7 @@ def test(cfg_file,
             n_gpu=n_gpu, n_best=1, normalization=normalization)
         # pylint: enable=unused-variable
 
-        if isinstance(data_set, TranslationDataset):
+        if data_set.online_load and hasattr(data_set, 'close_file'):
             data_set.close_file()
 
         if data_set.has_trg:
@@ -499,11 +499,11 @@ def translate(cfg_file: str,
         if "cmvn" in data_cfg.keys():
             kwargs["cmvn"] = CMVN(**data_cfg["cmvn"])
     trg_tokenizer = build_tokenizer(data_cfg, "trg")
-    test_data = MonoDataset(task=task,
-                            src_tokenizer=src_tokenizer,
-                            trg_tokenizer=trg_tokenizer,
-                            src_padding=src_padding,
-                            **kwargs)
+    test_data = StreamDataset(task=task,
+                              src_tokenizer=src_tokenizer,
+                              trg_tokenizer=trg_tokenizer,
+                              src_padding=src_padding,
+                              **kwargs)
 
     if not sys.stdin.isatty():
         # input stream given

@@ -63,7 +63,7 @@ def recurrent_greedy(src_mask: Tensor, max_output_length: int, model: Model,
     :param model: model to use for greedy decoding
     :param encoder_output: encoder hidden states for attention
     :param encoder_hidden: encoder last state for decoder initialization
-    :param generate_unk: whether to generate UNK token. if folse,
+    :param generate_unk: whether to generate UNK token. if false,
             the probability of UNK token will artificially be set to zero.
     :return:
         - stacked_output: output hypotheses (2d array of indices),

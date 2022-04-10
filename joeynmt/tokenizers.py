@@ -5,6 +5,7 @@ Data module
 
 import logging
 import sentencepiece as sp
+from subword_nmt import apply_bpe
 from typing import List
 
 from joeynmt.helpers_for_audio import remove_punc
@@ -72,10 +73,13 @@ class SentencePieceTokenizer(BasicTokenizer):
     def __call__(self, raw_input: str, sample: bool = False) -> List[str]:
         raw_input = self.pre_process(raw_input)
         if sample:
-            tokenized = self.spm.encode(raw_input, out_type=str,
-                                       enable_sampling=self.enable_sampling,
-                                       alpha=self.alpha,
-                                       nbest_size=self.nbest_size)
+            tokenized = self.spm.encode(
+                raw_input,
+                out_type=str,
+                enable_sampling=self.enable_sampling,
+                alpha=self.alpha,
+                nbest_size=self.nbest_size
+            )
         else:
             tokenized = self.spm.encode(raw_input, out_type=str)
         return tokenized
@@ -88,6 +92,48 @@ class SentencePieceTokenizer(BasicTokenizer):
         return "%s(level=%r, lowercase=%r, remove_punctuation=%r, tokenizer=%r)" % (
             self.__class__.__name__, self.level, self.lowercase,
             self.remove_punctuation, self.spm.__class__.__name__)
+
+
+class SubwordNMTTokenizer(BasicTokenizer):
+    def __init__(self, level: str = "bpe", lowercase: bool = False,
+                 remove_punctuation: bool = False, codes: str = "",
+                 separator: str = "@@", dropout: float = 0.0):
+        # pylint: unexpected-keyword-arg
+        super().__init__(level, lowercase, remove_punctuation)
+        assert self.level == "bpe"
+
+        bpe_parser = apply_bpe.create_parser()
+        bpe_args = bpe_parser.parse_args([
+            '--codes', codes,
+            '--separator', separator,
+        ])
+        self.bpe = apply_bpe.BPE(
+            bpe_args.codes,
+            bpe_args.merges,
+            bpe_args.separator,
+            None,
+            bpe_args.glossaries,
+        )
+        self.separator = separator
+        self.dropout = dropout
+
+    def __call__(self, raw_input: str, sample: bool = False) -> List[str]:
+        dropout = self.dropout if sample else 0.0
+        tokenized = self.bpe.process_line(raw_input, dropout)
+        return tokenized
+
+    def post_process(self, output: List[str]) -> str:
+        # Remove merge markers within the sentence.
+        detokenized = " ".join(output).replace(self.separator+" ", "")
+        # Remove final merge marker.
+        if detokenized.endswith(self.separator):
+            detokenized = ret[:-2]
+        return detokenized.strip()
+
+    def __repr__(self):
+        return "%s(level=%r, lowercase=%r, remove_punctuation=%r, tokenizer=%r)" % (
+            self.__class__.__name__, self.level, self.lowercase,
+            self.remove_punctuation, self.bpe.__class__.__name__)
 
 # from fairseq
 class EvaluationTokenizer(BasicTokenizer):
@@ -136,28 +182,28 @@ def build_tokenizer(data_cfg: dict, side: str):
     tokenizer = None
     cfg = data_cfg[side]
     try:
-        tokenizer_type = cfg.get("tokenizer",
-                                 cfg.get("bpe_type", "sentencepiece"))
-        if tokenizer_type == "sentencepiece":
-            assert cfg["level"] == "bpe"
-            tokenizer = SentencePieceTokenizer(
-                level=cfg["level"],
-                lowercase=cfg["lowercase"],
-                remove_punctuation=cfg.get("remove_punctuation", False),
-                **cfg["spm"])
-        elif tokenizer_type == "subword-nmt":
-            # TODO: support subword-nmt
-            assert cfg["level"] == "bpe"
-            raise NotImplementedError("subword-nmt is currently not supported.")
-        else:
-            assert cfg["level"] in ["word", "char"]
+        if cfg["level"] in ["word", "char"]:
             tokenizer = BasicTokenizer(
                 level=cfg["level"],
                 lowercase=cfg["lowercase"],
                 remove_punctuation=cfg.get("remove_punctuation", False))
+        elif cfg["level"] == "bpe":
+            tokenizer_type = cfg.get("tokenizer",
+                                     cfg.get("bpe_type", "sentencepiece"))
+            if tokenizer_type == "sentencepiece":
+                tokenizer = SentencePieceTokenizer(
+                    level=cfg["level"],
+                    lowercase=cfg["lowercase"],
+                    remove_punctuation=cfg.get("remove_punctuation", False),
+                    **cfg["spm"])
+            elif tokenizer_type == "subword-nmt":
+                tokenizer = SubwordNMTTokenizer(
+                    level=cfg["level"],
+                    lowercase=cfg["lowercase"],
+                    remove_punctuation=cfg.get("remove_punctuation", False),
+                    **cfg["subword-nmt"])
         logger.info(f'{side.title()} tokenizer: {tokenizer}')
     except Exception as e:
         logger.exception(e)
         raise Exception(e)
     return tokenizer
-

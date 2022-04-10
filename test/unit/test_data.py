@@ -2,7 +2,7 @@ import unittest
 
 import torch
 
-from joeynmt.data import TranslationDataset, load_data, make_data_iter
+from joeynmt.data import PlaintextDataset, load_data, make_data_iter
 
 
 class TestData(unittest.TestCase):
@@ -16,10 +16,15 @@ class TestData(unittest.TestCase):
         self.seed = 42
 
         # minimal data config
-        self.data_cfg = {"src": "de", "trg": "en", "train": self.train_path,
-                         "dev": self.dev_path, "level": "word",
-                         "lowercase": False,
-                         "max_sent_length": self.max_sent_length}
+        self.data_cfg = {
+            "task": "MT",
+            "train": self.train_path,
+            "dev": self.dev_path,
+            "src": {"lang": "de", "level": "word", "lowercase": False,
+                    "max_length": self.max_sent_length},
+            "trg": {"lang": "en", "level": "word", "lowercase": False,
+                    "max_length": self.max_sent_length},
+        }
 
     def testIteratorBatchType(self):
 
@@ -35,7 +40,7 @@ class TestData(unittest.TestCase):
         train_iter = iter(make_data_iter(
             train_data, batch_size=10, batch_type="sentence", shuffle=True,
             seed=self.seed, pad_index=trg_vocab.pad_index,
-            device=torch.device("cpu"), num_workers=0))
+            device=torch.device("cpu")))
         batch = next(train_iter)
 
         self.assertEqual(batch.src.shape[0], 10)
@@ -45,11 +50,12 @@ class TestData(unittest.TestCase):
         train_iter = iter(make_data_iter(
             train_data, batch_size=100, batch_type="token", shuffle=True,
             seed=self.seed, pad_index=trg_vocab.pad_index,
-            device=torch.device("cpu"), num_workers=0))
-        _ = next(train_iter)  # skip a batch
-        _ = next(train_iter)  # skip another batch
+            device=torch.device("cpu")))
+        b1 = next(train_iter)  # skip a batch
+        b2 = next(train_iter)  # skip another batch
         batch = next(train_iter)
-
+        #print(b1.src)
+        #print(b2.src)
         self.assertEqual(batch.src.shape, (9, 11))
         self.assertLessEqual(batch.ntokens, 64)
 
@@ -61,8 +67,10 @@ class TestData(unittest.TestCase):
             for level in self.levels:
                 for lowercase in [True, False]:
                     current_cfg = self.data_cfg.copy()
-                    current_cfg["level"] = level
-                    current_cfg["lowercase"] = lowercase
+                    current_cfg["src"]["level"] = level
+                    current_cfg["trg"]["level"] = level
+                    current_cfg["src"]["lowercase"] = lowercase
+                    current_cfg["trg"]["lowercase"] = lowercase
                     if test_path is not None:
                         datasets.append("test")
                         current_cfg["test"] = test_path
@@ -76,19 +84,18 @@ class TestData(unittest.TestCase):
                         load_data(current_cfg, datasets=datasets)
                     # pylint: enable=unused-variable
 
-                    self.assertIs(type(train_data), TranslationDataset)
-                    self.assertIs(type(dev_data), TranslationDataset)
+                    self.assertIs(type(train_data), PlaintextDataset)
+                    self.assertIs(type(dev_data), PlaintextDataset)
                     if test_path is None:
                         self.assertIsNone(test_data)
                     else:
-                        self.assertIs(type(test_data), TranslationDataset)
+                        self.assertIs(type(test_data), PlaintextDataset)
 
                     # check the number of examples loaded
-                    if level == "char":
-                        # training set is filtered to max_sent_length
-                        expected_train_len = 5
-                    else:
-                        expected_train_len = 382
+                    # NOTE: since tokenization is applied in batch construction,
+                    # we cannot compute the length and therefore cannot filter examples out
+                    # based on the length before batch iteration.
+                    expected_train_len = 1000
                     expected_testdev_len = 20  # dev and test have the same len
                     self.assertEqual(len(train_data), expected_train_len)
                     self.assertEqual(len(dev_data), expected_testdev_len)
@@ -98,19 +105,23 @@ class TestData(unittest.TestCase):
                         self.assertEqual(len(test_data), expected_testdev_len)
 
                     # check the segmentation: src and trg attributes are lists
-                    self.assertIs(type(train_data.src[0]), list)
-                    self.assertIs(type(train_data.trg[0]), list)
-                    self.assertIs(type(dev_data.src[0]), list)
-                    self.assertIs(type(dev_data.trg[0]), list)
+                    train_src, train_trg = train_data[0]
+                    dev_src, dev_trg = dev_data[0]
+                    self.assertIs(type(train_src), list)
+                    self.assertIs(type(train_trg), list)
+                    self.assertIs(type(dev_src), list)
+                    self.assertIs(type(dev_trg), list)
                     if test_path is not None:
-                        self.assertIs(type(test_data.src[0]), list)
-                        self.assertIs(test_data.trg, None)
+                        test_src, test_trg = test_data[0]
+                        self.assertIs(type(test_src), list)
+                        self.assertIs(test_trg, None)
 
                     # check the length filtering of the training examples
-                    self.assertFalse(any(len(ex) > self.max_sent_length for
-                                         ex in train_data.src))
-                    self.assertFalse(any(len(ex) > self.max_sent_length for
-                                         ex in train_data.trg))
+                    train_ex = [train_data[i] for i in range(len(train_data))]
+                    src_len, trg_len = zip(*[(len(s), len(t)) for s, t in train_ex
+                                             if s is not None and t is not None])
+                    self.assertFalse(any(sl > self.max_sent_length for sl in src_len))
+                    self.assertFalse(any(tl > self.max_sent_length for tl in trg_len))
 
                     # check the lowercasing
                     if lowercase:
@@ -166,9 +177,14 @@ class TestData(unittest.TestCase):
         # pylint: disable=unused-variable
         src_vocab, trg_vocab, train_data, dev_data, test_data = \
             load_data(current_cfg)
-        self.assertEqual(len(train_data), 382)
+        # NOTE: since tokenization is applied in batch construction,
+        # we cannot compute the length and therefore cannot filter examples out
+        # based on the length before batch iteration.
+        self.assertEqual(len(train_data), 1000)
 
-        current_cfg["random_train_subset"] = 10
+        current_cfg["random_train_subset"] = 100
         src_vocab, trg_vocab, train_data, dev_data, test_data = \
             load_data(current_cfg)
-        self.assertEqual(len(train_data), 10)
+        train_data.sample_random_subset()
+        self.assertEqual(len(train_data), 100)
+

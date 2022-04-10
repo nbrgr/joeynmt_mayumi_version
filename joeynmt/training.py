@@ -23,7 +23,7 @@ from torch.utils.tensorboard import SummaryWriter
 from joeynmt.batch import Batch
 from joeynmt.builders import build_gradient_clipper, build_optimizer, \
     build_scheduler
-from joeynmt.data import TsvDataset, TranslationDataset, load_data, make_data_iter
+from joeynmt.data import TsvDataset, PlaintextDataset, load_data, make_data_iter
 from joeynmt.helpers import delete_ckpt, load_checkpoint, load_config, \
     log_cfg, make_logger, make_model_dir, set_seed, store_attention_plots, \
     symlink_update, write_list_to_file
@@ -562,9 +562,9 @@ class TrainManager:
             self._save_checkpoint(False, float("nan"))
 
         self.tb_writer.close()  # close Tensorboard writer
-        if isinstance(train_data, TranslationDataset):
+        if train_data.batch_load:
             train_data.close_file()
-        if isinstance(valid_data, TranslationDataset):
+        if train_data.batch_load:
             valid_data.close_file()
 
     def _train_step(self, batch: Batch) -> Tensor:

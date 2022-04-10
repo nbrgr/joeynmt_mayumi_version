@@ -33,13 +33,13 @@ class TestPrediction(unittest.TestCase):
         torch.manual_seed(seed)
         self.cfg = {
             "data": {
-                "src": "de",
-                "trg": "en",
+                "task": "MT",
                 "train": "test/data/toy/train",     # needed for vocab
                 "test": "test/data/toy/test",
-                "level": "word",
-                "lowercase": False,
-                "max_sent_length": 10
+                "src": {"lang": "de", "level": "word",
+                        "lowercase": False, "max_sent_length": 10},
+                "trg": {"lang": "en", "level": "word",
+                        "lowercase": False, "max_sent_length": 10},
             },
             "testing": {
                 "bpe_type": None,
@@ -85,18 +85,17 @@ class TestPrediction(unittest.TestCase):
 
     def _translate(self, n_best):
         # pylint: disable=unused-variable
-        (batch_size, batch_type, device, n_gpu, level, eval_metric,
-         max_output_length, beam_size, beam_alpha, postprocess, bpe_type,
-         sacrebleu, _, _) = self.parsed_cfg
+        (batch_size, batch_type, device, n_gpu, eval_metric,
+         max_output_length, beam_size, beam_alpha, sacrebleu,
+         _, _, task, normalization) = self.parsed_cfg
 
-        (score, loss, ppl, sources, references, hypotheses, hypotheses_raw,
+        (scores, sources, references, hypotheses, hypotheses_raw,
          attention_scores) = validate_on_data(
             self.model, data=self.test_data, batch_size=batch_size,
-            batch_type=batch_type, level=level, device=device,
-            max_output_length=max_output_length, eval_metric=None,
-            compute_loss=False, beam_size=beam_size, beam_alpha=beam_alpha,
-            postprocess=postprocess, bpe_type=bpe_type, sacrebleu=sacrebleu,
-            n_gpu=n_gpu, n_best=n_best)
+            batch_type=batch_type, max_output_length=max_output_length,
+            eval_metrics=[], compute_loss=False, beam_size=beam_size,
+            beam_alpha=beam_alpha, sacrebleu=sacrebleu, device=device,
+            n_gpu=n_gpu, n_best=n_best, normalization=normalization)
         return sources, hypotheses
 
     def test_transformer_nbest(self):

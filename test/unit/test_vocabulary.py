@@ -2,6 +2,7 @@
 from pathlib import Path
 import unittest
 
+from joeynmt.helpers import read_list_from_file
 from joeynmt.vocabulary import Vocabulary
 
 
@@ -43,8 +44,8 @@ class TestVocabulary(unittest.TestCase):
         self.word_vocab.to_file(self.temp_file_word)
         self.char_vocab.to_file(self.temp_file_char)
 
-        word_vocab2 = Vocabulary(file=self.temp_file_word)
-        char_vocab2 = Vocabulary(file=self.temp_file_char)
+        word_vocab2 = Vocabulary(tokens=read_list_from_file(self.temp_file_word))
+        char_vocab2 = Vocabulary(tokens=read_list_from_file(self.temp_file_char))
         self.assertEqual(self.word_vocab, word_vocab2)
         self.assertEqual(self.char_vocab, char_vocab2)
         self.temp_file_char.unlink()

@@ -286,7 +286,7 @@ class RecurrentDecoder(Decoder):
                 hidden: Tensor = None,
                 prev_att_vector: Tensor = None,
                 **kwargs) \
-            -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+            -> Tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """
          Unroll the decoder one step at a time for `unroll_steps` steps.
          For every step, the `_forward_step` function is called internally.

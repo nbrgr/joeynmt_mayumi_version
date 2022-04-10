@@ -163,8 +163,9 @@ class TestSearchRecurrent(TestSearch):
             batch_size=batch_size)
 
         output, attention_scores = recurrent_greedy(
-            src_mask=src_mask, max_output_length=max_output_length, model=model,
-            encoder_output=encoder_output, encoder_hidden=encoder_hidden)
+            src_mask=src_mask, max_output_length=max_output_length,
+            model=model, encoder_output=encoder_output,
+            encoder_hidden=encoder_hidden, generate_unk=True)
 
         self.assertEqual(output.shape, (batch_size, max_output_length))
         np.testing.assert_equal(output, [[4, 0, 4], [4, 4, 4]])

@@ -12,12 +12,13 @@ class TestBatch(TensorTestCase):
 
     def setUp(self):
         # minimal data config
-        data_cfg = {"src": "de", "trg": "en",
-                    "train": "test/data/toy/train",
-                    "dev": "test/data/toy/dev",
-                    "level": "char",
-                    "lowercase": True,
-                    "max_sent_length": 20}
+        data_cfg = {
+            "task": "MT",
+            "train": "test/data/toy/train",
+            "dev": "test/data/toy/dev",
+            "src": {"lang": "de", "level": "char", "lowercase": True, "max_sent_length": 20},
+            "trg": {"lang": "en", "level": "char", "lowercase": True, "max_sent_length": 20},
+        }
 
         # load the data
         self.src_vocab, self.trg_vocab, self.train_data, self.dev_data, _ \
@@ -29,7 +30,8 @@ class TestBatch(TensorTestCase):
     def testBatchTrainIterator(self):
 
         batch_size = 4
-        self.assertEqual(len(self.train_data), 27)
+        # load  all sents, filtering happens during batch construction
+        self.assertEqual(len(self.train_data), 1000)
 
         # make data iterator
         train_iter = make_data_iter(dataset=self.train_data,
@@ -38,8 +40,7 @@ class TestBatch(TensorTestCase):
                                     shuffle=True,
                                     seed=self.seed,
                                     pad_index=self.pad_index,
-                                    device=torch.device("cpu"),
-                                    num_workers=0)
+                                    device=torch.device("cpu"))
         self.assertTrue(isinstance(train_iter, DataLoader))
         self.assertEqual(train_iter.batch_sampler.batch_size, batch_size)
         self.assertTrue(isinstance(train_iter.batch_sampler, BatchSampler))
@@ -76,7 +77,8 @@ class TestBatch(TensorTestCase):
     def testTokenBatchTrainIterator(self):
 
         batch_size = 50  # num of tokens in one batch
-        self.assertEqual(len(self.train_data), 27)
+        # load all sents here, filtering happends during batch construction
+        self.assertEqual(len(self.train_data), 1000)
 
         # make data iterator
         train_iter = make_data_iter(dataset=self.train_data,
@@ -85,8 +87,7 @@ class TestBatch(TensorTestCase):
                                     shuffle=True,
                                     seed=self.seed,
                                     pad_index=self.pad_index,
-                                    device=torch.device("cpu"),
-                                    num_workers=0)
+                                    device=torch.device("cpu"))
         self.assertTrue(isinstance(train_iter, DataLoader))
         self.assertEqual(train_iter.batch_sampler.batch_size, batch_size)
         self.assertTrue(isinstance(train_iter.batch_sampler, TokenBatchSampler))
@@ -116,7 +117,7 @@ class TestBatch(TensorTestCase):
                 self.assertTensorEqual(b.trg_length, expected_trg0_len)
             total_tokens += b.ntokens
         self.assertEqual(total_tokens, 387)
-
+        self.train_data.close_file()
 
     def testBatchDevIterator(self):
 
@@ -129,8 +130,7 @@ class TestBatch(TensorTestCase):
                                   batch_type="sentence",
                                   shuffle=False,
                                   pad_index=self.pad_index,
-                                  device=torch.device("cpu"),
-                                  num_workers=0)
+                                  device=torch.device("cpu"))
         self.assertTrue(isinstance(dev_iter, DataLoader))
         self.assertEqual(dev_iter.batch_sampler.batch_size, batch_size)
         self.assertTrue(isinstance(dev_iter.batch_sampler, BatchSampler))
@@ -173,4 +173,5 @@ class TestBatch(TensorTestCase):
             total_samples += b.nseqs
             self.assertLessEqual(b.nseqs, batch_size)
         self.assertEqual(total_samples, len(self.dev_data))
+        self.dev_data.close_file()
         

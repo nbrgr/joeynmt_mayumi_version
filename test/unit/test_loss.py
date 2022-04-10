@@ -46,7 +46,7 @@ class TestTransformerUtils(TensorTestCase):
         assert torch.max(smoothed_targets) == 1 - smoothing
 
         # test the loss computation
-        v = criterion(predict.log(), targets)
+        v, = criterion(predict.log(), **{"trg": targets})
         self.assertTensorAlmostEqual(v, 2.1326)
 
     def test_no_label_smoothing(self):
@@ -86,5 +86,5 @@ class TestTransformerUtils(TensorTestCase):
                  [0., 0., 0., 0., 0.]])
         )
 
-        v = criterion(predict.log(), targets)
+        v, = criterion(predict.log(), **{"trg": targets})
         self.assertTensorAlmostEqual(v, 5.6268)

@@ -214,27 +214,6 @@ def read_list_from_file(input_path: Path) -> List[str]:
             input_path.read_text(encoding='utf-8').splitlines()]
 
 
-def bpe_postprocess(string, bpe_type="subword-nmt") -> str:
-    """
-    Post-processor for BPE output. Recombines BPE-split tokens.
-
-    :param string:
-    :param bpe_type: one of {"sentencepiece", "subword-nmt"}
-    :return: post-processed string
-    """
-    if bpe_type == "sentencepiece":
-        ret = string.replace(" ", "").replace("▁", " ").strip()
-    elif bpe_type == "subword-nmt":
-        # Remove merge markers within the sentence.
-        ret = string.replace("@@ ", "").strip()
-        # Remove final merge marker.
-        if ret.endswith("@@"):
-            ret = ret[:-2]
-    else:
-        ret = string.strip()
-    return ret
-
-
 def store_attention_plots(attentions: np.ndarray,
                           targets: List[List[str]],
                           sources: List[List[str]],

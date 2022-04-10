@@ -23,7 +23,7 @@ def chrf(hypotheses: List[str], references: List[str],
     score = sacrebleu.corpus_chrf(hypotheses=hypotheses,
                                   references=[references],
                                   remove_whitespace=remove_whitespace).score
-    return score
+    return score / 100
 
 
 def bleu(hypotheses: List[str], references: List[str], tokenize: str = "13a") \

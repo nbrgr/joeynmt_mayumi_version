@@ -12,6 +12,7 @@ from torch import Tensor
 from joeynmt.constants import PAD_ID
 logger = logging.getLogger(__name__)
 
+
 class Batch:
     """
     Object for holding a batch of data with mask during training.
@@ -115,7 +116,6 @@ class Batch:
         return "%s(nseqs=%d, ntokens=%d, has_trg=%r, normalizer=%d)" % (
             self.__class__.__name__, self.nseqs, self.ntokens, self.has_trg,
             self.normalizer)
-
 
 
 class SpeechBatch(Batch):
