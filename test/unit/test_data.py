@@ -6,6 +6,7 @@ from joeynmt.data import load_data, make_data_iter
 
 
 class TestData(unittest.TestCase):
+
     def setUp(self):
         self.train_path = "test/data/toy/train"
         self.dev_path = "test/data/toy/dev"
@@ -37,7 +38,8 @@ class TestData(unittest.TestCase):
         current_cfg = self.data_cfg.copy()
 
         # load toy data
-        _, trg_vocab, train_data, _, _ = load_data(current_cfg, datasets=["train"])
+        _, trg_vocab, train_data, _, _ = load_data(current_cfg,
+                                                   datasets=["train"])
 
         # make batches by number of sentences
         train_iter = iter(
@@ -50,8 +52,7 @@ class TestData(unittest.TestCase):
                 pad_index=trg_vocab.pad_index,
                 device=torch.device("cpu"),
                 num_workers=0,
-            )
-        )
+            ))
         batch = next(train_iter)
 
         self.assertEqual(batch.src.shape[0], 10)
@@ -68,8 +69,7 @@ class TestData(unittest.TestCase):
                 pad_index=trg_vocab.pad_index,
                 device=torch.device("cpu"),
                 num_workers=0,
-            )
-        )
+            ))
         _ = next(train_iter)  # skip a batch
         _ = next(train_iter)  # skip another batch
         batch = next(train_iter)

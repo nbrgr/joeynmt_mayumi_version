@@ -9,6 +9,7 @@ from joeynmt.vocabulary import Vocabulary
 
 
 class TestModelInit(TensorTestCase):
+
     def setUp(self):
         self.seed = 42
         vocab_size = 30
@@ -23,14 +24,18 @@ class TestModelInit(TensorTestCase):
                 "encoder": {
                     "type": "transformer",
                     "hidden_size": self.hidden_size,
-                    "embeddings": {"embedding_dim": self.hidden_size},
+                    "embeddings": {
+                        "embedding_dim": self.hidden_size
+                    },
                     "num_layers": 1,
                     "layer_norm": "pre",
                 },
                 "decoder": {
                     "type": "transformer",
                     "hidden_size": self.hidden_size,
-                    "embeddings": {"embedding_dim": self.hidden_size},
+                    "embeddings": {
+                        "embedding_dim": self.hidden_size
+                    },
                     "num_layers": 1,
                     "layer_norm": "pre",
                 },
@@ -43,13 +48,17 @@ class TestModelInit(TensorTestCase):
 
         src_vocab = trg_vocab = self.vocab
 
-        model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
+        model = build_model(cfg["model"],
+                            src_vocab=src_vocab,
+                            trg_vocab=trg_vocab)
 
         def check_layer_norm(m: nn.Module):
             for _, child in m.named_children():
                 if isinstance(child, nn.LayerNorm):
-                    self.assertTensorEqual(child.weight, torch.ones([self.hidden_size]))
-                    self.assertTensorEqual(child.bias, torch.zeros([self.hidden_size]))
+                    self.assertTensorEqual(child.weight,
+                                           torch.ones([self.hidden_size]))
+                    self.assertTensorEqual(child.bias,
+                                           torch.zeros([self.hidden_size]))
                 else:
                     check_layer_norm(child)
 
@@ -64,7 +73,9 @@ class TestModelInit(TensorTestCase):
 
         src_vocab = trg_vocab = self.vocab
 
-        model = build_model(cfg["model"], src_vocab=src_vocab, trg_vocab=trg_vocab)
+        model = build_model(cfg["model"],
+                            src_vocab=src_vocab,
+                            trg_vocab=trg_vocab)
 
         self.assertEqual(len(model.encoder.layers), 6)
         self.assertEqual(len(model.decoder.layers), 6)

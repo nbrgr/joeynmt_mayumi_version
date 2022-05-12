@@ -25,7 +25,6 @@ from torch.utils.tensorboard import SummaryWriter
 
 from joeynmt.plotting import plot_heatmap
 
-
 if TYPE_CHECKING:
     from joeynmt.dataset import BaseDataset
     from joeynmt.vocabulary import Vocabulary  # to avoid circular import
@@ -46,9 +45,8 @@ def make_model_dir(model_dir: Path, overwrite: bool = False) -> Path:
     model_dir = model_dir.absolute()
     if model_dir.is_dir():
         if not overwrite:
-            raise FileExistsError(
-                f"Model directory {model_dir} exists " f"and overwriting is disabled."
-            )
+            raise FileExistsError(f"Model directory {model_dir} exists "
+                                  f"and overwriting is disabled.")
         # delete previous directory to start with empty dir again
         shutil.rmtree(model_dir)
     model_dir.mkdir()
@@ -70,8 +68,7 @@ def make_logger(log_dir: Path = None, mode: str = "train") -> str:
     if len(logger.handlers) == 0:
         logger.setLevel(level=logging.DEBUG)
         formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-        )
+            "%(asctime)s - %(levelname)s - %(name)s - %(message)s")
 
         if log_dir is not None:
             if log_dir.is_dir():
@@ -169,11 +166,11 @@ def log_data_info(
 
     if train_data:
         src = "\n\t[SRC] " + " ".join(
-            train_data.get_item(idx=0, lang=train_data.src_lang, is_train=False)
-        )
+            train_data.get_item(
+                idx=0, lang=train_data.src_lang, is_train=False))
         trg = "\n\t[TRG] " + " ".join(
-            train_data.get_item(idx=0, lang=train_data.trg_lang, is_train=False)
-        )
+            train_data.get_item(
+                idx=0, lang=train_data.trg_lang, is_train=False))
         logger.info("First training example:%s%s", src, trg)
 
     logger.info("First 10 Src tokens: %s", src_vocab.log_vocab(10))
@@ -266,7 +263,8 @@ def parse_train_args(cfg: Dict, mode: str = "training") -> Tuple:
     loss_type: str = cfg.get("loss", "crossentropy")
     label_smoothing: float = cfg.get("label_smoothing", 0.0)
     if loss_type not in ["crossentropy"]:
-        raise ConfigurationError("Invalid `loss` type. Valid option: {`crossentropy`}.")
+        raise ConfigurationError(
+            "Invalid `loss` type. Valid option: {`crossentropy`}.")
 
     # minimum learning rate for early stopping
     learning_rate_min: float = cfg.get("learning_rate_min", 1.0e-8)
@@ -276,10 +274,8 @@ def parse_train_args(cfg: Dict, mode: str = "training") -> Tuple:
     _keep_last_ckpts: Optional[int] = cfg.get("keep_last_ckpts", None)
     if _keep_last_ckpts is not None:  # backward compatibility
         keep_best_ckpts = _keep_last_ckpts
-        logger.warning(
-            "`keep_last_ckpts` option is outdated. "
-            "Please use `keep_best_ckpts`, instead."
-        )
+        logger.warning("`keep_last_ckpts` option is outdated. "
+                       "Please use `keep_best_ckpts`, instead.")
 
     # logging, validation
     logging_freq: int = cfg.get("logging_freq", 100)
@@ -287,12 +283,12 @@ def parse_train_args(cfg: Dict, mode: str = "training") -> Tuple:
     log_valid_sents: List[int] = cfg.get("print_valid_sents", [0, 1, 2])
 
     # early stopping
-    early_stopping_metric: str = cfg.get("early_stopping_metric", "ppl").lower()
+    early_stopping_metric: str = cfg.get("early_stopping_metric",
+                                         "ppl").lower()
     if early_stopping_metric not in ["acc", "loss", "ppl", "bleu", "chrf"]:
         raise ConfigurationError(
             "Invalid setting for `early_stopping_metric`. "
-            "Valid options: {`acc`, `loss`, `ppl`, `bleu`, `chrf`}."
-        )
+            "Valid options: {`acc`, `loss`, `ppl`, `bleu`, `chrf`}.")
 
     # data & batch handling
     seed: int = cfg.get("random_seed", 42)
@@ -395,11 +391,9 @@ def store_attention_plots(
                 )
                 tb_writer.add_figure(f"attention/{i}.", fig, global_step=steps)
         except Exception:  # pylint: disable=broad-except
-            print(
-                f"Couldn't plot example {i}: "
-                f"src len {len(src)}, trg len {len(trg)}, "
-                f"attention scores shape {attention_scores.shape}"
-            )
+            print(f"Couldn't plot example {i}: "
+                  f"src len {len(src)}, trg len {len(trg)}, "
+                  f"attention scores shape {attention_scores.shape}")
             continue
 
 
@@ -419,7 +413,8 @@ def get_latest_checkpoint(ckpt_dir: Path) -> Optional[Path]:
 
     # check existence
     if latest_checkpoint is None:
-        raise FileNotFoundError(f"No checkpoint found in directory {ckpt_dir}.")
+        raise FileNotFoundError(
+            f"No checkpoint found in directory {ckpt_dir}.")
     return latest_checkpoint
 
 
@@ -479,14 +474,8 @@ def tile(x: Tensor, count: int, dim=0) -> Tensor:
     out_size = list(x.size())
     out_size[0] *= count
     batch = x.size(0)
-    x = (
-        x.view(batch, -1)
-        .transpose(0, 1)
-        .repeat(count, 1)
-        .transpose(0, 1)
-        .contiguous()
-        .view(*out_size)
-    )
+    x = (x.view(batch, -1).transpose(0, 1).repeat(count, 1).transpose(
+        0, 1).contiguous().view(*out_size))
     if dim != 0:
         x = x.permute(perm).contiguous()
     return x
@@ -516,7 +505,8 @@ def delete_ckpt(to_delete: Path) -> None:
 
     except FileNotFoundError as e:
         logger.warning(
-            "Wanted to delete old checkpoint %s but " "file does not exist. (%s)",
+            "Wanted to delete old checkpoint %s but "
+            "file does not exist. (%s)",
             to_delete,
             e,
         )
@@ -557,7 +547,8 @@ def flatten(array: List[List[Any]]) -> List[Any]:
     return functools.reduce(operator.iconcat, array, [])
 
 
-def expand_reverse_index(reverse_index: List[int], n_best: int = 1) -> List[int]:
+def expand_reverse_index(reverse_index: List[int],
+                         n_best: int = 1) -> List[int]:
     """
     Expand resort_reverse_index for n_best prediction
 

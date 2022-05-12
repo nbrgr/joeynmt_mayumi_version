@@ -23,7 +23,6 @@ from joeynmt.constants import (
 from joeynmt.datasets import BaseDataset
 from joeynmt.helpers import flatten, read_list_from_file, write_list_to_file
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -108,9 +107,10 @@ class Vocabulary:
             return self._itos == other._itos
         return False
 
-    def array_to_sentence(
-        self, array: np.ndarray, cut_at_eos: bool = True, skip_pad: bool = True
-    ) -> List[str]:
+    def array_to_sentence(self,
+                          array: np.ndarray,
+                          cut_at_eos: bool = True,
+                          skip_pad: bool = True) -> List[str]:
         """
         Converts an array of IDs to a sentence, optionally cutting the result off at the
         end-of-sequence token.
@@ -131,9 +131,10 @@ class Vocabulary:
                 break
         return sentence
 
-    def arrays_to_sentences(
-        self, arrays: np.ndarray, cut_at_eos: bool = True, skip_pad: bool = True
-    ) -> List[List[str]]:
+    def arrays_to_sentences(self,
+                            arrays: np.ndarray,
+                            cut_at_eos: bool = True,
+                            skip_pad: bool = True) -> List[List[str]]:
         """
         Convert multiple arrays containing sequences of token IDs to their sentences,
         optionally cutting them off at the end-of-sequence token.
@@ -144,15 +145,16 @@ class Vocabulary:
         :return: list of list of strings (tokens)
         """
         return [
-            self.array_to_sentence(
-                array=array, cut_at_eos=cut_at_eos, skip_pad=skip_pad
-            )
-            for array in arrays
+            self.array_to_sentence(array=array,
+                                   cut_at_eos=cut_at_eos,
+                                   skip_pad=skip_pad) for array in arrays
         ]
 
     def sentences_to_ids(
-        self, sentences: List[List[str]], bos: bool = True, eos: bool = True
-    ) -> Tuple[List[List[int]], List[int]]:
+            self,
+            sentences: List[List[str]],
+            bos: bool = True,
+            eos: bool = True) -> Tuple[List[List[int]], List[int]]:
         """
         Encode sentences to indices and pad sequences to the maximum length of the
         sentences given
@@ -184,15 +186,13 @@ class Vocabulary:
         return " ".join(f"({i}) {t}" for i, t in enumerate(self._itos[:k]))
 
     def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}(len={self.__len__()}, "
-            f"specials={self.specials})"
-        )
+        return (f"{self.__class__.__name__}(len={self.__len__()}, "
+                f"specials={self.specials})")
 
 
-def sort_and_cut(
-    counter: Counter, max_size: int = sys.maxsize, min_freq: int = -1
-) -> List[str]:
+def sort_and_cut(counter: Counter,
+                 max_size: int = sys.maxsize,
+                 min_freq: int = -1) -> List[str]:
     """
     Cut counter to most frequent, sorted numerically and alphabetically
     :param counter: flattened token list in Counter object
@@ -223,7 +223,8 @@ def _build_vocab(cfg: Dict, dataset: BaseDataset = None) -> Vocabulary:
     :return: Vocabulary created from either `tokens` or `vocab_file`
     """
     vocab_file = cfg.get("voc_file", None)
-    min_freq = cfg.get("voc_min_freq", 1)  # min freq for an item to be included
+    min_freq = cfg.get("voc_min_freq",
+                       1)  # min freq for an item to be included
     max_size = int(cfg.get("voc_limit", sys.maxsize))  # max size of vocabulary
     assert max_size > 0
 
@@ -251,9 +252,9 @@ def _build_vocab(cfg: Dict, dataset: BaseDataset = None) -> Vocabulary:
     return vocab
 
 
-def build_vocab(
-    cfg: Dict, dataset: BaseDataset = None, model_dir: Path = None
-) -> Tuple[Vocabulary, Vocabulary]:
+def build_vocab(cfg: Dict,
+                dataset: BaseDataset = None,
+                model_dir: Path = None) -> Tuple[Vocabulary, Vocabulary]:
     if model_dir is not None and dataset is None:
         # use the vocab file saved in model_dir
         cfg["src"]["voc_file"] = (model_dir / "src_vocab.txt").as_posix()

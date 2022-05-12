@@ -20,7 +20,8 @@ class XentLoss(nn.Module):
         self.criterion: _Loss  # (type annotation)
         if self.smoothing <= 0.0:
             # standard xent loss
-            self.criterion = nn.NLLLoss(ignore_index=self.pad_index, reduction="sum")
+            self.criterion = nn.NLLLoss(ignore_index=self.pad_index,
+                                        reduction="sum")
         else:
             # custom label-smoothed loss, computed with KL divergence loss
             self.criterion = nn.KLDivLoss(reduction="sum")
@@ -39,13 +40,13 @@ class XentLoss(nn.Module):
         # fill distribution uniformly with smoothing
         smooth_dist.fill_(self.smoothing / (vocab_size - 2))
         # assign true label the probability of 1-smoothing ("confidence")
-        smooth_dist.scatter_(1, targets.unsqueeze(1).data, 1.0 - self.smoothing)
+        smooth_dist.scatter_(1,
+                             targets.unsqueeze(1).data, 1.0 - self.smoothing)
         # give padding probability of 0 everywhere
         smooth_dist[:, self.pad_index] = 0
         # masking out padding area (sum of probabilities for padding area = 0)
-        padding_positions = torch.nonzero(
-            targets.data == self.pad_index, as_tuple=False
-        )
+        padding_positions = torch.nonzero(targets.data == self.pad_index,
+                                          as_tuple=False)
         if len(padding_positions) > 0:
             smooth_dist.index_fill_(0, padding_positions.squeeze(), 0.0)
         return Variable(smooth_dist, requires_grad=False)
@@ -58,8 +59,7 @@ class XentLoss(nn.Module):
 
         if self.smoothing > 0:
             targets_flat = self._smooth_targets(
-                targets=targets.contiguous().view(-1), vocab_size=vocab_size
-            )
+                targets=targets.contiguous().view(-1), vocab_size=vocab_size)
             # targets: distributions with batch*seq_len x vocab_size
             assert log_probs_flat.size() == targets_flat.size(), (
                 log_probs.size(),
@@ -94,7 +94,5 @@ class XentLoss(nn.Module):
         return logits
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}(criterion={self.criterion}, "
-            f"smoothing={self.smoothing})"
-        )
+        return (f"{self.__class__.__name__}(criterion={self.criterion}, "
+                f"smoothing={self.smoothing})")

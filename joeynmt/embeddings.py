@@ -14,7 +14,6 @@ from torch import Tensor, nn
 from joeynmt.helpers import freeze_params
 from joeynmt.vocabulary import Vocabulary
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +47,9 @@ class Embeddings(nn.Module):
         self.embedding_dim = embedding_dim
         self.scale = scale
         self.vocab_size = vocab_size
-        self.lut = nn.Embedding(vocab_size, self.embedding_dim, padding_idx=padding_idx)
+        self.lut = nn.Embedding(vocab_size,
+                                self.embedding_dim,
+                                padding_idx=padding_idx)
 
         if freeze:
             freeze_params(self)
@@ -65,11 +66,9 @@ class Embeddings(nn.Module):
         return self.lut(x)
 
     def __repr__(self) -> str:
-        return (
-            f"{self.__class__.__name__}("
-            f"embedding_dim={self.embedding_dim}, "
-            f"vocab_size={self.vocab_size})"
-        )
+        return (f"{self.__class__.__name__}("
+                f"embedding_dim={self.embedding_dim}, "
+                f"vocab_size={self.vocab_size})")
 
     # from fairseq
     def load_from_file(self, embed_path: Path, vocab: Vocabulary) -> None:
@@ -99,15 +98,15 @@ class Embeddings(nn.Module):
 
         embed_dict: Dict[int, Tensor] = {}
         # parse file
-        with embed_path.open("r", encoding="utf-8", errors="ignore") as f_embed:
+        with embed_path.open("r", encoding="utf-8",
+                             errors="ignore") as f_embed:
             vocab_size, d = map(int, f_embed.readline().split())
             assert self.embedding_dim == d, "Embedding dimension doesn't match."
             for line in f_embed.readlines():
                 tokens = line.rstrip().split(" ")
                 if tokens[0] in vocab.specials or not vocab.is_unk(tokens[0]):
                     embed_dict[vocab.lookup(tokens[0])] = torch.FloatTensor(
-                        [float(t) for t in tokens[1:]]
-                    )
+                        [float(t) for t in tokens[1:]])
 
             logger.warning(
                 "Loaded %d of %d (%%) tokens in the pre-trained WE.",

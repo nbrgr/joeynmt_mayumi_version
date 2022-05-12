@@ -14,7 +14,6 @@ from joeynmt.decoders import RecurrentDecoder, TransformerDecoder
 from joeynmt.helpers import tile
 from joeynmt.model import Model
 
-
 __all__ = ["greedy", "beam_search", "search"]
 
 
@@ -102,7 +101,9 @@ def recurrent_greedy(
     eos_index = model.eos_index
     unk_index = model.unk_index
     batch_size = src_mask.size(0)
-    prev_y = src_mask.new_full((batch_size, 1), fill_value=bos_index, dtype=torch.long)
+    prev_y = src_mask.new_full((batch_size, 1),
+                               fill_value=bos_index,
+                               dtype=torch.long)
 
     output = []
     scores = []
@@ -190,12 +191,14 @@ def transformer_greedy(
     ys = encoder_output.new_full((batch_size, 1), bos_index, dtype=torch.long)
 
     # placeholder for scores
-    yv = ys.new_zeros((batch_size, 1), dtype=torch.float) if return_prob else None
+    yv = ys.new_zeros(
+        (batch_size, 1), dtype=torch.float) if return_prob else None
 
     # a subsequent mask is intersected with this in decoder forward pass
     trg_mask = src_mask.new_ones([1, 1, 1])
     if isinstance(model, torch.nn.DataParallel):
-        trg_mask = torch.stack([src_mask.new_ones([1, 1]) for _ in model.device_ids])
+        trg_mask = torch.stack(
+            [src_mask.new_ones([1, 1]) for _ in model.device_ids])
 
     finished = src_mask.new_zeros(batch_size).byte()
 
@@ -320,23 +323,25 @@ def beam_search(
         trg_mask = src_mask.new_ones([1, 1, 1])
         if isinstance(model, torch.nn.DataParallel):
             trg_mask = torch.stack(
-                [src_mask.new_ones([1, 1]) for _ in model.device_ids]
-            )
+                [src_mask.new_ones([1, 1]) for _ in model.device_ids])
 
     # numbering elements in the batch
     batch_offset = torch.arange(batch_size, dtype=torch.long, device=device)
 
     # numbering elements in the extended batch, i.e. k copies of each batch element
-    beam_offset = torch.arange(
-        0, batch_size * beam_size, step=beam_size, dtype=torch.long, device=device
-    )
+    beam_offset = torch.arange(0,
+                               batch_size * beam_size,
+                               step=beam_size,
+                               dtype=torch.long,
+                               device=device)
 
     # keeps track of the top beam size hypotheses to expand for each element in the
     # batch to be further decoded (that are still "alive")
     # `alive_seq` shape: (batch_size * beam_size, hyp_len) ... now hyp_len = 1
-    alive_seq = torch.full(
-        (batch_size * beam_size, 1), bos_index, dtype=torch.long, device=device
-    )
+    alive_seq = torch.full((batch_size * beam_size, 1),
+                           bos_index,
+                           dtype=torch.long,
+                           device=device)
 
     # Give full probability (=zero in log space) to the first beam on the first step.
     # `topk_log_probs` shape: (batch_size, beam_size)
@@ -353,9 +358,10 @@ def beam_search(
 
     # indicator if the generation is finished
     # `is_finished` shape: (batch_size, beam_size)
-    is_finished = torch.full(
-        (batch_size, beam_size), False, dtype=torch.bool, device=device
-    )
+    is_finished = torch.full((batch_size, beam_size),
+                             False,
+                             dtype=torch.bool,
+                             device=device)
 
     for step in range(max_output_length):
         if transformer:
@@ -410,7 +416,7 @@ def beam_search(
 
         # compute length penalty
         if alpha > 0:
-            length_penalty = ((5.0 + (step + 1)) / 6.0) ** alpha
+            length_penalty = ((5.0 + (step + 1)) / 6.0)**alpha
             curr_scores /= length_penalty
 
         # flatten log_probs into a list of possibilities
@@ -433,17 +439,20 @@ def beam_search(
 
         # map topk_beam_index to batch_index in the flat representation
         # `batch_index` shape: (remaining_batch_size, beam_size)
-        batch_index = topk_beam_index + beam_offset[: topk_ids.size(0)].unsqueeze(1)
+        batch_index = topk_beam_index + beam_offset[:topk_ids.
+                                                    size(0)].unsqueeze(1)
         select_indices = batch_index.view(-1)
 
         # append latest prediction
         # `alive_seq` shape: (remaining_batch_size * beam_size, hyp_len)
         alive_seq = torch.cat(
-            [alive_seq.index_select(0, select_indices), topk_ids.view(-1, 1)],
+            [alive_seq.index_select(0, select_indices),
+             topk_ids.view(-1, 1)],
             -1,
         )
         # `is_finished` shape: (remaining_batch_size, beam_size)
-        is_finished = topk_ids.eq(eos_index) | is_finished | topk_scores.eq(-np.inf)
+        is_finished = topk_ids.eq(eos_index) | is_finished | topk_scores.eq(
+            -np.inf)
         if step + 1 == max_output_length:
             is_finished.fill_(True)
 
@@ -455,8 +464,10 @@ def beam_search(
             # `predictions` shape: (remaining_batch_size, beam_size, hyp_len)
             predictions = alive_seq.view(-1, beam_size, alive_seq.size(-1))
 
-            for i in range(is_finished.size(0)):  # loop over remaining examples
-                b = batch_offset[i].item()  # index of that example in the batch
+            for i in range(
+                    is_finished.size(0)):  # loop over remaining examples
+                b = batch_offset[i].item(
+                )  # index of that example in the batch
                 if end_condition[i]:
                     is_finished[i].fill_(True)
                 # indices of finished beam candidates for this example (1d tensor)
@@ -466,17 +477,19 @@ def beam_search(
                     # If the prediction doesn't end with EOS, it means that either
                     # max_output_length reached or the prediction has already been
                     # added to the hypotheses, so we don't add them again.
-                    n_eos = (predictions[i, j, 1:] == eos_index).count_nonzero().item()
-                    if (
-                        (n_eos == 2 and predictions[i, j, -1] == eos_index)
-                        or n_eos == 0
-                        and step + 1 == max_output_length
-                    ):
-                        hypotheses[b].append((topk_scores[i, j], predictions[i, j, 1:]))
+                    n_eos = (
+                        predictions[i, j,
+                                    1:] == eos_index).count_nonzero().item()
+                    if ((n_eos == 2 and predictions[i, j, -1] == eos_index)
+                            or n_eos == 0 and step + 1 == max_output_length):
+                        hypotheses[b].append(
+                            (topk_scores[i, j], predictions[i, j, 1:]))
 
                 # if all nbest candidates of the i-th example reached the end, save them
                 if end_condition[i]:
-                    best_hyp = sorted(hypotheses[b], key=lambda x: x[0], reverse=True)
+                    best_hyp = sorted(hypotheses[b],
+                                      key=lambda x: x[0],
+                                      reverse=True)
                     for n, (score, pred) in enumerate(best_hyp):
                         if n >= n_best:
                             break
@@ -488,7 +501,8 @@ def beam_search(
                         results["predictions"][b].append(pred)
 
             # batch indices of the examples which contain unfinished candidates
-            unfinished = end_condition.eq(False).nonzero(as_tuple=False).view(-1)
+            unfinished = end_condition.eq(False).nonzero(
+                as_tuple=False).view(-1)
             # if all examples are translated, no need to go further
             if len(unfinished) == 0:
                 break
@@ -504,8 +518,7 @@ def beam_search(
             # We won't add already finished candidates to `hypotheses` list.
             # `alive_seq` shape: (remaining_batch_size * beam_size, hyp_len)
             alive_seq = predictions.index_select(0, unfinished).view(
-                -1, alive_seq.size(-1)
-            )
+                -1, alive_seq.size(-1))
 
         # reorder indices, outputs and masks
         select_indices = batch_index.view(-1)
@@ -527,9 +540,9 @@ def beam_search(
             att_vectors = att_vectors.index_select(0, select_indices)
 
     def pad_and_stack_hyps(hyps):
-        filled = (
-            np.ones((len(hyps), max([h.shape[0] for h in hyps])), dtype=int) * pad_index
-        )
+        filled = (np.ones(
+            (len(hyps), max([h.shape[0]
+                             for h in hyps])), dtype=int) * pad_index)
         for j, h in enumerate(hyps):
             for k, i in enumerate(h):
                 filled[j, k] = i
@@ -537,13 +550,9 @@ def beam_search(
 
     # from results to stacked outputs
     final_outputs = pad_and_stack_hyps(
-        [u.cpu().numpy() for r in results["predictions"] for u in r],
-    )
-    scores = (
-        np.array([[u.item()] for r in results["scores"] for u in r])
-        if return_prob
-        else None
-    )
+        [u.cpu().numpy() for r in results["predictions"] for u in r], )
+    scores = (np.array([[u.item()] for r in results["scores"]
+                        for u in r]) if return_prob else None)
     return final_outputs, scores, None
 
 
@@ -576,9 +585,8 @@ def search(
         - stacked_attention_scores: attention scores for batch
     """
     with torch.no_grad():
-        encoder_output, encoder_hidden, _, _ = model(
-            return_type="encode", **vars(batch)
-        )
+        encoder_output, encoder_hidden, _, _ = model(return_type="encode",
+                                                     **vars(batch))
 
     # if maximum output length is not globally specified, adapt to src len
     if max_output_length is None:

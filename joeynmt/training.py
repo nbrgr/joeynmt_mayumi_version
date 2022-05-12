@@ -39,7 +39,6 @@ from joeynmt.helpers import (
 from joeynmt.model import Model, _DataParallel, build_model
 from joeynmt.prediction import predict, test
 
-
 # for fp16 training
 try:
     from apex import amp
@@ -101,7 +100,8 @@ class TrainManager:
 
         # logging and storing
         self.model_dir = model_dir
-        self.tb_writer = SummaryWriter(log_dir=(model_dir / "tensorboard").as_posix())
+        self.tb_writer = SummaryWriter(log_dir=(model_dir /
+                                                "tensorboard").as_posix())
         self.logging_freq = logging_freq
         self.validation_freq = validation_freq
         self.log_valid_sents = log_valid_sents
@@ -121,9 +121,8 @@ class TrainManager:
 
         # optimization
         self.clip_grad_fun = build_gradient_clipper(config=cfg["training"])
-        self.optimizer = build_optimizer(
-            config=cfg["training"], parameters=self.model.parameters()
-        )
+        self.optimizer = build_optimizer(config=cfg["training"],
+                                         parameters=self.model.parameters())
 
         # save/delete checkpoints
         self.num_ckpts = keep_best_ckpts
@@ -136,7 +135,8 @@ class TrainManager:
         # after loss/ppl, we want to minimize the score, else we want to maximize it.
         if self.early_stopping_metric in ["ppl", "loss"]:  # lower is better
             self.minimize_metric = True
-        elif self.early_stopping_metric in ["acc", "bleu", "chrf"]:  # higher is better
+        elif self.early_stopping_metric in ["acc", "bleu",
+                                            "chrf"]:  # higher is better
             self.minimize_metric = False
 
         # learning rate scheduling
@@ -179,12 +179,11 @@ class TrainManager:
             if "apex" not in sys.modules:
                 raise ImportError(
                     "Please install apex from https://www.github.com/nvidia/apex "
-                    "to use fp16 training."
-                ) from no_apex  # pylint: disable=used-before-assignment
+                    "to use fp16 training.") from no_apex  # pylint: disable=used-before-assignment
 
-            self.model, self.optimizer = amp.initialize(
-                self.model, self.optimizer, opt_level="O1"
-            )
+            self.model, self.optimizer = amp.initialize(self.model,
+                                                        self.optimizer,
+                                                        opt_level="O1")
             # opt level: one of {"O0", "O1", "O2", "O3"}
             # see https://nvidia.github.io/apex/amp.html#opt-levels
 
@@ -232,25 +231,27 @@ class TrainManager:
             float('nan'), the queue won't be updated.
         """
         model_path = Path(self.model_dir) / f"{self.stats.steps}.ckpt"
-        model_state_dict = (
-            self.model.module.state_dict()
-            if isinstance(self.model, torch.nn.DataParallel)
-            else self.model.state_dict()
-        )
+        model_state_dict = (self.model.module.state_dict() if isinstance(
+            self.model, torch.nn.DataParallel) else self.model.state_dict())
         state = {
-            "steps": self.stats.steps,
-            "total_tokens": self.stats.total_tokens,
-            "best_ckpt_score": self.stats.best_ckpt_score,
-            "best_ckpt_iteration": self.stats.best_ckpt_iter,
-            "model_state": model_state_dict,
-            "optimizer_state": self.optimizer.state_dict(),
-            "scheduler_state": (
-                self.scheduler.state_dict() if self.scheduler is not None else None
-            ),
-            "amp_state": amp.state_dict() if self.fp16 else None,
-            "train_iter_state": (
-                self.train_iter.batch_sampler.sampler.generator.get_state()
-            ),
+            "steps":
+            self.stats.steps,
+            "total_tokens":
+            self.stats.total_tokens,
+            "best_ckpt_score":
+            self.stats.best_ckpt_score,
+            "best_ckpt_iteration":
+            self.stats.best_ckpt_iter,
+            "model_state":
+            model_state_dict,
+            "optimizer_state":
+            self.optimizer.state_dict(),
+            "scheduler_state": (self.scheduler.state_dict()
+                                if self.scheduler is not None else None),
+            "amp_state":
+            amp.state_dict() if self.fp16 else None,
+            "train_iter_state":
+            (self.train_iter.batch_sampler.sampler.generator.get_state()),
         }
         torch.save(state, model_path.as_posix())
 
@@ -278,7 +279,8 @@ class TrainManager:
                     heapq.heappush(self.ckpt_queue, (score, model_path))
                     # pylint: enable=protected-access
                 else:
-                    to_delete = heapq.heappushpop(self.ckpt_queue, (score, model_path))
+                    to_delete = heapq.heappushpop(self.ckpt_queue,
+                                                  (score, model_path))
 
             if to_delete is not None:
                 assert to_delete[1] != model_path  # don't delete the last ckpt
@@ -289,7 +291,7 @@ class TrainManager:
 
             # remove old symlink target if not in queue after push/pop
             if prev_path is not None and prev_path.stem not in [
-                c[1].stem for c in self.ckpt_queue
+                    c[1].stem for c in self.ckpt_queue
             ]:
                 delete_ckpt(prev_path)
 
@@ -330,11 +332,10 @@ class TrainManager:
             logger.info("Reset optimizer.")
 
         if not reset_scheduler:
-            if (
-                model_checkpoint["scheduler_state"] is not None
-                and self.scheduler is not None
-            ):
-                self.scheduler.load_state_dict(model_checkpoint["scheduler_state"])
+            if (model_checkpoint["scheduler_state"] is not None
+                    and self.scheduler is not None):
+                self.scheduler.load_state_dict(
+                    model_checkpoint["scheduler_state"])
         else:
             logger.info("Reset scheduler.")
 
@@ -378,7 +379,8 @@ class TrainManager:
                 layer_state_dict[k] = v
         self.model.load_state_dict(layer_state_dict, strict=False)
 
-    def train_and_validate(self, train_data: Dataset, valid_data: Dataset) -> None:
+    def train_and_validate(self, train_data: Dataset,
+                           valid_data: Dataset) -> None:
         """
         Train the model and validate it from time to time on the validation set.
 
@@ -399,8 +401,7 @@ class TrainManager:
 
         if self.train_iter_state is not None:
             self.train_iter.batch_sampler.sampler.generator.set_state(
-                self.train_iter_state.cpu()
-            )
+                self.train_iter_state.cpu())
 
         #################################################################
         # simplify accumulation logic:
@@ -438,7 +439,8 @@ class TrainManager:
             self.n_gpu,
             self.fp16,
             self.batch_multiplier,
-            self.batch_size // self.n_gpu if self.n_gpu > 1 else self.batch_size,
+            self.batch_size //
+            self.n_gpu if self.n_gpu > 1 else self.batch_size,
             self.batch_size * self.batch_multiplier,
         )
 
@@ -489,10 +491,11 @@ class TrainManager:
                         if self.clip_grad_fun is not None:
                             if self.fp16:
                                 self.clip_grad_fun(
-                                    parameters=amp.master_params(self.optimizer)
-                                )
+                                    parameters=amp.master_params(
+                                        self.optimizer))
                             else:
-                                self.clip_grad_fun(parameters=self.model.parameters())
+                                self.clip_grad_fun(
+                                    parameters=self.model.parameters())
 
                         # make gradient step
                         self.optimizer.step()
@@ -511,15 +514,16 @@ class TrainManager:
 
                         # log learning progress
                         if self.stats.steps % self.logging_freq == 0:
-                            elapsed = time.time() - start - total_valid_duration
+                            elapsed = time.time(
+                            ) - start - total_valid_duration
                             elapsed_tok = self.stats.total_tokens - start_tokens
                             token_accuracy = total_n_correct / elapsed_tok
-                            self.tb_writer.add_scalar(
-                                "train/batch_loss", total_batch_loss, self.stats.steps
-                            )
-                            self.tb_writer.add_scalar(
-                                "train/batch_acc", token_accuracy, self.stats.steps
-                            )
+                            self.tb_writer.add_scalar("train/batch_loss",
+                                                      total_batch_loss,
+                                                      self.stats.steps)
+                            self.tb_writer.add_scalar("train/batch_acc",
+                                                      token_accuracy,
+                                                      self.stats.steps)
                             logger.info(
                                 "Epoch %3d, "
                                 "Step: %8d, "
@@ -553,20 +557,18 @@ class TrainManager:
                         if current_lr < self.learning_rate_min:
                             self.stats.is_min_lr = True
 
-                        self.tb_writer.add_scalar(
-                            "train/learning_rate", current_lr, self.stats.steps
-                        )
+                        self.tb_writer.add_scalar("train/learning_rate",
+                                                  current_lr, self.stats.steps)
 
                     if self.stats.is_min_lr or self.stats.is_max_update:
                         break
 
                 if self.stats.is_min_lr or self.stats.is_max_update:
-                    log_str = (
-                        f"minimum lr {self.learning_rate_min}"
-                        if self.stats.is_min_lr
-                        else f"maximum num. of updates {self.max_updates}"
-                    )
-                    logger.info("Training ended since %s was reached.", log_str)
+                    log_str = (f"minimum lr {self.learning_rate_min}"
+                               if self.stats.is_min_lr else
+                               f"maximum num. of updates {self.max_updates}")
+                    logger.info("Training ended since %s was reached.",
+                                log_str)
                     break
 
                 logger.info(
@@ -577,7 +579,8 @@ class TrainManager:
             else:
                 logger.info("Training ended after %3d epochs.", epoch_no + 1)
             logger.info(
-                "Best validation result (greedy) " "at step %8d: %6.2f %s.",
+                "Best validation result (greedy) "
+                "at step %8d: %6.2f %s.",
                 self.stats.best_ckpt_iter,
                 self.stats.best_ckpt_score,
                 self.early_stopping_metric,
@@ -600,7 +603,8 @@ class TrainManager:
         self.model.train()
 
         # get loss (run as during training with teacher forcing)
-        batch_loss, _, _, correct_tokens = self.model(return_type="loss", **vars(batch))
+        batch_loss, _, _, correct_tokens = self.model(return_type="loss",
+                                                      **vars(batch))
 
         # normalize batch loss
         norm_batch_loss = batch.normalize(
@@ -615,7 +619,8 @@ class TrainManager:
 
         # accumulate gradients
         if self.fp16:
-            with amp.scale_loss(norm_batch_loss, self.optimizer) as scaled_loss:
+            with amp.scale_loss(norm_batch_loss,
+                                self.optimizer) as scaled_loss:
                 scaled_loss.backward()
         else:
             norm_batch_loss.backward()
@@ -660,9 +665,8 @@ class TrainManager:
         # for eval_metric in ['loss', 'ppl', 'acc'] + self.eval_metrics:
         for eval_metric, score in valid_scores.items():
             if not math.isnan(score):
-                self.tb_writer.add_scalar(
-                    f"valid/{eval_metric}", score, self.stats.steps
-                )
+                self.tb_writer.add_scalar(f"valid/{eval_metric}", score,
+                                          self.stats.steps)
 
         ckpt_score = valid_scores[self.early_stopping_metric]
 
@@ -680,11 +684,8 @@ class TrainManager:
             )
 
         # save checkpoints
-        is_better = (
-            self.stats.is_better(ckpt_score, self.ckpt_queue)
-            if len(self.ckpt_queue) > 0
-            else True
-        )
+        is_better = (self.stats.is_better(ckpt_score, self.ckpt_queue)
+                     if len(self.ckpt_queue) > 0 else True)
         if self.num_ckpts < 0 or is_better:
             self._save_checkpoint(new_best, ckpt_score)
 
@@ -699,18 +700,19 @@ class TrainManager:
         )
 
         # store validation set outputs
-        write_list_to_file(
-            self.model_dir / f"{self.stats.steps}.hyps", valid_hypotheses
-        )
+        write_list_to_file(self.model_dir / f"{self.stats.steps}.hyps",
+                           valid_hypotheses)
 
         # store attention plots for selected valid sentences
         if valid_attention_scores:
             store_attention_plots(
                 attentions=valid_attention_scores,
                 targets=valid_hypotheses_raw,
-                sources=valid_data.get_list(lang=valid_data.src_lang, tokenized=True),
+                sources=valid_data.get_list(lang=valid_data.src_lang,
+                                            tokenized=True),
                 indices=self.log_valid_sents,
-                output_prefix=(self.model_dir / f"att.{self.stats.steps}").as_posix(),
+                output_prefix=(self.model_dir /
+                               f"att.{self.stats.steps}").as_posix(),
                 tb_writer=self.tb_writer,
                 steps=self.stats.steps,
             )
@@ -728,15 +730,11 @@ class TrainManager:
 
         valid_file = self.model_dir / "validations.txt"
         with valid_file.open("a", encoding="utf-8") as opened_file:
-            score_str = "\t".join(
-                [f"Steps: {self.stats.steps}"]
-                + [
-                    f"{eval_metric}: {score:.5f}"
-                    for eval_metric, score in valid_scores.items()
-                    if not math.isnan(score)
-                ]
-                + [f"LR: {current_lr:.8f}", "*" if new_best else ""]
-            )
+            score_str = "\t".join([f"Steps: {self.stats.steps}"] + [
+                f"{eval_metric}: {score:.5f}"
+                for eval_metric, score in valid_scores.items()
+                if not math.isnan(score)
+            ] + [f"LR: {current_lr:.8f}", "*" if new_best else ""])
             opened_file.write(f"{score_str}\n")
 
     def _log_examples(
@@ -772,6 +770,7 @@ class TrainManager:
             logger.info("\tHypothesis: %s", hypotheses[p])
 
     class TrainStatistics:
+
         def __init__(
             self,
             steps: int = 0,
@@ -825,8 +824,7 @@ def train(cfg_file: str, skip_test: bool = False) -> None:
     if "joeynmt_version" in cfg:
         assert str(joeynmt_version) == str(cfg["joeynmt_version"]), (
             f"You are using JoeyNMT version {joeynmt_version}, "
-            f'but {cfg["joeynmt_version"]} is expected in the given config.'
-        )
+            f'but {cfg["joeynmt_version"]} is expected in the given config.')
     # TODO: save version number in model checkpoints
 
     # write all entries of config to the log
@@ -840,8 +838,7 @@ def train(cfg_file: str, skip_test: bool = False) -> None:
 
     # load the data
     src_vocab, trg_vocab, train_data, dev_data, test_data = load_data(
-        data_cfg=cfg["data"]
-    )
+        data_cfg=cfg["data"])
 
     # store the vocabs and tokenizers
     src_vocab.to_file(model_dir / "src_vocab.txt")

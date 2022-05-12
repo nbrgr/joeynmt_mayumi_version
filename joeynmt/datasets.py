@@ -12,7 +12,6 @@ from torch.utils.data import Dataset
 from joeynmt.helpers import ConfigurationError, read_list_from_file
 from joeynmt.tokenizers import BasicTokenizer
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -51,9 +50,8 @@ class BaseDataset(Dataset):
 
         _place_holder = {self.src_lang: None, self.trg_lang: None}
         self.tokenizer = _place_holder if tokenizer is None else tokenizer
-        self.sequence_encoder = (
-            _place_holder if sequence_encoder is None else sequence_encoder
-        )
+        self.sequence_encoder = (_place_holder if sequence_encoder is None else
+                                 sequence_encoder)
 
         # for ransom subsampling
         self.random_subset = random_subset
@@ -92,9 +90,9 @@ class BaseDataset(Dataset):
                 src = None
         return src, trg
 
-    def get_list(
-        self, lang: str, tokenized: bool = False
-    ) -> Union[List[str], List[List[str]]]:
+    def get_list(self,
+                 lang: str,
+                 tokenized: bool = False) -> Union[List[str], List[List[str]]]:
         """get data column-wise."""
         raise NotImplementedError
 
@@ -106,7 +104,8 @@ class BaseDataset(Dataset):
     @property
     def trg(self) -> List[str]:
         """get detokenized preprocessed data in trg language."""
-        return self.get_list(self.trg_lang, tokenized=False) if self.has_trg else []
+        return self.get_list(self.trg_lang,
+                             tokenized=False) if self.has_trg else []
 
     def __len__(self) -> int:
         raise NotImplementedError
@@ -115,8 +114,7 @@ class BaseDataset(Dataset):
         return (
             f"{self.__class__.__name__}(split={self.split}, len={self.__len__()}, "
             f"src_lang={self.src_lang}, trg_lang={self.trg_lang}, "
-            f"has_trg={self.has_trg}, random_subset={self.random_subset})"
-        )
+            f"has_trg={self.has_trg}, random_subset={self.random_subset})")
 
 
 class PlaintextDataset(BaseDataset):
@@ -156,6 +154,7 @@ class PlaintextDataset(BaseDataset):
         self.idx_map = []
 
     def load_data(self, path: str, **kwargs) -> Any:
+
         def _pre_process(seq, lang):
             if self.tokenizer[lang] is not None:
                 seq = [self.tokenizer[lang].pre_process(s) for s in seq]
@@ -180,12 +179,16 @@ class PlaintextDataset(BaseDataset):
         super().sample_random_subset(seed)  # check validity
 
         random.seed(seed)  # resample every epoch: seed += epoch_no
-        self.idx_map = list(random.sample(range(self._initial_len), self.random_subset))
+        self.idx_map = list(
+            random.sample(range(self._initial_len), self.random_subset))
 
     def reset_random_subset(self):
         self.idx_map = []
 
-    def get_item(self, idx: int, lang: str, is_train: bool = None) -> List[str]:
+    def get_item(self,
+                 idx: int,
+                 lang: str,
+                 is_train: bool = None) -> List[str]:
         line = self._look_up_item(idx, lang)
         is_train = self.split == "train" if is_train is None else is_train
         item = self.tokenizer[lang](line, is_train=is_train)
@@ -197,9 +200,9 @@ class PlaintextDataset(BaseDataset):
         line = self.data[lang][idx]
         return line
 
-    def get_list(
-        self, lang: str, tokenized: bool = False
-    ) -> Union[List[str], List[List[str]]]:
+    def get_list(self,
+                 lang: str,
+                 tokenized: bool = False) -> Union[List[str], List[List[str]]]:
         """
         Return list of preprocessed sentences in the given language.
         (not length-filtered, no bpe-dropout)
@@ -208,9 +211,8 @@ class PlaintextDataset(BaseDataset):
         for idx in range(self.__len__()):
             item = self._look_up_item(idx, lang)
             if tokenized:
-                item = self.tokenizer[lang](
-                    self._look_up_item(idx, lang), is_train=False
-                )
+                item = self.tokenizer[lang](self._look_up_item(idx, lang),
+                                            is_train=False)
             item_list.append(item)
         return item_list
 
@@ -276,16 +278,14 @@ class TsvDataset(BaseDataset):
             # TODO: use `chunksize` for online data loading.
             assert self.src_lang in df.columns
             df[self.src_lang] = df[self.src_lang].apply(
-                self.tokenizer[self.src_lang].pre_process
-            )
+                self.tokenizer[self.src_lang].pre_process)
 
             if self.trg_lang not in df.columns:
                 self.has_trg = False
                 assert self.split == "test"
             if self.has_trg:
                 df[self.trg_lang] = df[self.trg_lang].apply(
-                    self.tokenizer[self.trg_lang].pre_process
-                )
+                    self.tokenizer[self.trg_lang].pre_process)
             return df
 
         except ImportError as e:
@@ -309,20 +309,20 @@ class TsvDataset(BaseDataset):
         self.df = self._initial_df
         self._initial_df = None
 
-    def get_item(self, idx: int, lang: str, is_train: bool = None) -> List[str]:
+    def get_item(self,
+                 idx: int,
+                 lang: str,
+                 is_train: bool = None) -> List[str]:
         line = self.df.iloc[idx][lang]
         is_train = self.split == "train" if is_train is None else is_train
         item = self.tokenizer[lang](line, is_train=is_train)
         return item
 
-    def get_list(
-        self, lang: str, tokenized: bool = False
-    ) -> Union[List[str], List[List[str]]]:
-        return (
-            self.df[lang].apply(self.tokenizer[lang]).to_list()
-            if tokenized
-            else self.df[lang].to_list()
-        )
+    def get_list(self,
+                 lang: str,
+                 tokenized: bool = False) -> Union[List[str], List[List[str]]]:
+        return (self.df[lang].apply(self.tokenizer[lang]).to_list()
+                if tokenized else self.df[lang].to_list())
 
     def __len__(self) -> int:
         return len(self.df)
@@ -370,7 +370,10 @@ class StreamDataset(BaseDataset):
         line = self.tokenizer[self.src_lang].pre_process(line)
         self.cache[idx] = (line, None)
 
-    def get_item(self, idx: int, lang: str, is_train: bool = None) -> List[str]:
+    def get_item(self,
+                 idx: int,
+                 lang: str,
+                 is_train: bool = None) -> List[str]:
         assert idx in self.cache, (idx, self.cache)
         assert lang == self.src_lang, (lang, self.src_lang)
         line, _ = self.cache[idx]
@@ -384,8 +387,7 @@ class StreamDataset(BaseDataset):
         return (
             f"{self.__class__.__name__}(split={self.split}, len={len(self.cache)}, "
             f"src_lang={self.src_lang}, trg_lang={self.trg_lang}, "
-            f"has_trg={self.has_trg}, random_subset={self.random_subset})"
-        )
+            f"has_trg={self.has_trg}, random_subset={self.random_subset})")
 
 
 class BaseHuggingfaceDataset(BaseDataset):
@@ -435,13 +437,17 @@ class BaseHuggingfaceDataset(BaseDataset):
         super().sample_random_subset(seed)  # check validity
 
         # resample every epoch: seed += epoch_no
-        self.dataset = self.dataset.shuffle(seed=seed).select(range(self.random_subset))
+        self.dataset = self.dataset.shuffle(seed=seed).select(
+            range(self.random_subset))
 
     def reset_random_subset(self) -> None:
         # reload from cache
         self.dataset = self.load_data(**self._kwargs)
 
-    def get_item(self, idx: int, lang: str, is_train: bool = None) -> List[str]:
+    def get_item(self,
+                 idx: int,
+                 lang: str,
+                 is_train: bool = None) -> List[str]:
         # lookup
         line = self.dataset[idx]
         assert lang in line, (line, lang)
@@ -463,11 +469,9 @@ class BaseHuggingfaceDataset(BaseDataset):
         return self.dataset.num_rows
 
     def __repr__(self) -> str:
-        ret = (
-            f"{self.__class__.__name__}(len={self.__len__()}, "
-            f"src_lang={self.src_lang}, trg_lang={self.trg_lang}, "
-            f"has_trg={self.has_trg}, random_subset={self.random_subset}"
-        )
+        ret = (f"{self.__class__.__name__}(len={self.__len__()}, "
+               f"src_lang={self.src_lang}, trg_lang={self.trg_lang}, "
+               f"has_trg={self.has_trg}, random_subset={self.random_subset}")
         for k, v in self._kwargs.items():
             ret += f", {k}={v}"
         ret += ")"
@@ -500,11 +504,8 @@ class HuggingfaceDataset(BaseHuggingfaceDataset):
             f"translation.{self.src_lang}": self.src_lang,
             f"translation.{self.trg_lang}": self.trg_lang,
         }
-        return (
-            dataset.flatten()
-            .rename_columns(columns)
-            .map(_pre_process, desc="Preprocessing...")
-        )
+        return (dataset.flatten().rename_columns(columns).map(
+            _pre_process, desc="Preprocessing..."))
 
 
 def build_dataset(

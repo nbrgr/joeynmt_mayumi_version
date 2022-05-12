@@ -8,11 +8,11 @@ from typing import List
 
 from sacrebleu.metrics import BLEU, CHRF
 
-
 logger = logging.getLogger(__name__)
 
 
-def chrf(hypotheses: List[str], references: List[str], **sacrebleu_cfg) -> float:
+def chrf(hypotheses: List[str], references: List[str],
+         **sacrebleu_cfg) -> float:
     """
     Character F-score from sacrebleu
     cf. https://github.com/mjpost/sacrebleu/blob/master/sacrebleu/metrics/chrf.py
@@ -30,14 +30,16 @@ def chrf(hypotheses: List[str], references: List[str], **sacrebleu_cfg) -> float
                 kwargs[k] = v
 
     metric = CHRF(**kwargs)
-    score = metric.corpus_score(hypotheses=hypotheses, references=[references]).score
+    score = metric.corpus_score(hypotheses=hypotheses,
+                                references=[references]).score
 
     # log sacrebleu signature
     logger.debug(metric.get_signature())
     return score / 100
 
 
-def bleu(hypotheses: List[str], references: List[str], **sacrebleu_cfg) -> float:
+def bleu(hypotheses: List[str], references: List[str],
+         **sacrebleu_cfg) -> float:
     """
     Raw corpus BLEU from sacrebleu (without tokenization)
     cf. https://github.com/mjpost/sacrebleu/blob/master/sacrebleu/metrics/bleu.py
@@ -54,14 +56,16 @@ def bleu(hypotheses: List[str], references: List[str], **sacrebleu_cfg) -> float
                 kwargs[k] = v
 
     metric = BLEU(**kwargs)
-    score = metric.corpus_score(hypotheses=hypotheses, references=[references]).score
+    score = metric.corpus_score(hypotheses=hypotheses,
+                                references=[references]).score
 
     # log sacrebleu signature
     logger.debug(metric.get_signature())
     return score
 
 
-def token_accuracy(hypotheses: List[List[str]], references: List[List[str]]) -> float:
+def token_accuracy(hypotheses: List[List[str]],
+                   references: List[List[str]]) -> float:
     """
     Compute the accuracy of hypothesis tokens: correct tokens / all tokens
     Tokens are correct if they appear in the same position in the reference.
@@ -97,6 +101,5 @@ def sequence_accuracy(hypotheses: List[str], references: List[str]) -> float:
     """
     assert len(hypotheses) == len(references)
     correct_sequences = sum(
-        [1 for (hyp, ref) in zip(hypotheses, references) if hyp == ref]
-    )
+        [1 for (hyp, ref) in zip(hypotheses, references) if hyp == ref])
     return (correct_sequences / len(hypotheses)) * 100 if hypotheses else 0.0

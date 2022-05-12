@@ -12,6 +12,7 @@ from joeynmt.tokenizers import (
 
 
 class TestTokenizer(unittest.TestCase):
+
     def setUp(self):
         self.train_path = "test/data/toy/train"
         self.dev_path = "test/data/toy/dev"
@@ -60,7 +61,8 @@ class TestTokenizer(unittest.TestCase):
                 current_cfg["src"]["lowercase"] = lowercase
                 current_cfg["trg"]["lowercase"] = lowercase
 
-                _, _, train_data, _, _ = load_data(current_cfg, datasets=["train"])
+                _, _, train_data, _, _ = load_data(current_cfg,
+                                                   datasets=["train"])
                 for lang in [train_data.src_lang, train_data.src_lang]:
                     tokenizer = train_data.tokenizer[lang]
                     self.assertIs(type(tokenizer), BasicTokenizer)
@@ -102,28 +104,39 @@ class TestTokenizer(unittest.TestCase):
             cfg[side]["max_length"] = 30
             cfg[side]["level"] = "bpe"
             cfg[side]["tokenizer_type"] = "sentencepiece"
-            cfg[side]["tokenizer_cfg"] = {"model_file": "test/data/toy/sp200.model"}
+            cfg[side]["tokenizer_cfg"] = {
+                "model_file": "test/data/toy/sp200.model"
+            }
             cfg[side]["voc_file"] = "test/data/toy/sp200.txt"
 
         # 6th example from the training set
         expected = {
             "de": {
-                "tokenized": ['▁D', 'er', '▁', 'G', 'r', 'o', 'ß', 'te', 'il', '▁der',
-                              '▁E', 'r', 'd', 'e', '▁ist', '▁M', 'e', 'er', 'w', 'as',
-                              's', 'er', '.'],
-                "dropout": ['▁D', 'er', '▁', 'G', 'r', 'o', 'ß', 't', 'e', 'il', '▁der',
-                            '▁E', 'r', 'd', 'e', '▁ist', '▁M', 'e', 'er', 'w', 'a', 's',
-                            'se', 'r', '.'],
-                "detokenized": "Der Großteil der Erde ist Meerwasser.",
+                "tokenized": [
+                    '▁D', 'er', '▁', 'G', 'r', 'o', 'ß', 'te', 'il', '▁der',
+                    '▁E', 'r', 'd', 'e', '▁ist', '▁M', 'e', 'er', 'w', 'as',
+                    's', 'er', '.'
+                ],
+                "dropout": [
+                    '▁D', 'er', '▁', 'G', 'r', 'o', 'ß', 't', 'e', 'il',
+                    '▁der', '▁E', 'r', 'd', 'e', '▁ist', '▁M', 'e', 'er', 'w',
+                    'a', 's', 'se', 'r', '.'
+                ],
+                "detokenized":
+                "Der Großteil der Erde ist Meerwasser.",
             },
             "en": {
-                "tokenized": ['▁M', 'o', 'st', '▁of', '▁the', '▁', 'p', 'l', 'an', 'e',
-                              't', '▁is', '▁', 'o', 'c', 'e', 'an', '▁w', 'at', 'er',
-                              '.'],
-                "dropout": ['▁M', 'o', 'st', '▁of', '▁the', '▁', 'p', 'l', 'an', 'e',
-                            't', '▁is', '▁', 'o', 'c', 'e', 'an', '▁', 'w', 'a', 'te',
-                            'r', '.'],
-                "detokenized": "Most of the planet is ocean water.",
+                "tokenized": [
+                    '▁M', 'o', 'st', '▁of', '▁the', '▁', 'p', 'l', 'an', 'e',
+                    't', '▁is', '▁', 'o', 'c', 'e', 'an', '▁w', 'at', 'er', '.'
+                ],
+                "dropout": [
+                    '▁M', 'o', 'st', '▁of', '▁the', '▁', 'p', 'l', 'an', 'e',
+                    't', '▁is', '▁', 'o', 'c', 'e', 'an', '▁', 'w', 'a', 'te',
+                    'r', '.'
+                ],
+                "detokenized":
+                "Most of the planet is ocean water.",
             }
         }
 
@@ -155,7 +168,9 @@ class TestTokenizer(unittest.TestCase):
             cfg[side]["max_length"] = 30
             cfg[side]["level"] = "bpe"
             cfg[side]["tokenizer_type"] = "subword-nmt"
-            cfg[side]["tokenizer_cfg"] = {"codes": "test/data/toy/bpe200.codes"}
+            cfg[side]["tokenizer_cfg"] = {
+                "codes": "test/data/toy/bpe200.codes"
+            }
             cfg[side]["voc_file"] = "test/data/toy/bpe200.txt"
 
         # 191st example from the training set
@@ -167,7 +182,8 @@ class TestTokenizer(unittest.TestCase):
             },
             "en": {
                 "tokenized": ['Th@@', 'an@@', 'k', 'y@@', 'ou@@', '.'],
-                "dropout": ['T@@', 'ha@@', 'n@@', 'k', 'y@@', 'o@@', 'u@@', '.'],
+                "dropout":
+                ['T@@', 'ha@@', 'n@@', 'k', 'y@@', 'o@@', 'u@@', '.'],
                 "detokenized": "Thank you.",
             }
         }

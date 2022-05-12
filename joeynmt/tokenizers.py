@@ -14,7 +14,6 @@ from subword_nmt import apply_bpe
 from joeynmt.constants import BOS_TOKEN, EOS_TOKEN, PAD_TOKEN, UNK_TOKEN
 from joeynmt.helpers import ConfigurationError, remove_extra_spaces, unicode_normalize
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -83,13 +82,16 @@ class BasicTokenizer:
             specials.append(UNK_TOKEN)
         return [token for token in sequence if token not in specials]
 
-    def post_process(self, sequence: List[str], remove_unk: bool = False) -> str:
+    def post_process(self,
+                     sequence: List[str],
+                     remove_unk: bool = False) -> str:
         """Detokenize"""
         sequence = self._remove_special(sequence, remove_unk=remove_unk)
         if self.level == "word":
             detokenized = self.SPACE.join(sequence)
         elif self.level == "char":
-            detokenized = "".join(sequence).replace(self.SPACE_ESCAPE, self.SPACE)
+            detokenized = "".join(sequence).replace(self.SPACE_ESCAPE,
+                                                    self.SPACE)
 
         # Remove extra spaces
         if self.normalize:
@@ -97,14 +99,13 @@ class BasicTokenizer:
         return detokenized
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}(level={self.level}, "
-            f"lowercase={self.lowercase}, normalize={self.normalize}, "
-            f"filter_by_length=({self.min_length}, {self.max_length}))"
-        )
+        return (f"{self.__class__.__name__}(level={self.level}, "
+                f"lowercase={self.lowercase}, normalize={self.normalize}, "
+                f"filter_by_length=({self.min_length}, {self.max_length}))")
 
 
 class SentencePieceTokenizer(BasicTokenizer):
+
     def __init__(
         self,
         level: str = "bpe",
@@ -118,7 +119,8 @@ class SentencePieceTokenizer(BasicTokenizer):
         assert self.level == "bpe"
 
         self.model_file: Path = Path(kwargs["model_file"])
-        assert self.model_file.is_file(), f"model file {self.model_file} not found."
+        assert self.model_file.is_file(
+        ), f"model file {self.model_file} not found."
 
         self.spm = sp.SentencePieceProcessor()
         self.spm.load(kwargs["model_file"])
@@ -140,7 +142,9 @@ class SentencePieceTokenizer(BasicTokenizer):
             return None
         return tokenized
 
-    def post_process(self, sequence: List[str], remove_unk: bool = False) -> str:
+    def post_process(self,
+                     sequence: List[str],
+                     remove_unk: bool = False) -> str:
         sequence = self._remove_special(sequence, remove_unk=remove_unk)
 
         # Decode back to str
@@ -165,19 +169,19 @@ class SentencePieceTokenizer(BasicTokenizer):
                 "%s already exists. Stop copying.",
                 (model_dir / self.model_file.name).as_posix(),
             )
-        shutil.copy2(self.model_file, (model_dir / self.model_file.name).as_posix())
+        shutil.copy2(self.model_file,
+                     (model_dir / self.model_file.name).as_posix())
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}(level={self.level}, "
-            f"lowercase={self.lowercase}, normalize={self.normalize}, "
-            f"filter_by_length=({self.min_length}, {self.max_length}), "
-            f"tokenizer={self.spm.__class__.__name__}, "
-            f"nbest_size={self.nbest_size}, alpha={self.alpha})"
-        )
+        return (f"{self.__class__.__name__}(level={self.level}, "
+                f"lowercase={self.lowercase}, normalize={self.normalize}, "
+                f"filter_by_length=({self.min_length}, {self.max_length}), "
+                f"tokenizer={self.spm.__class__.__name__}, "
+                f"nbest_size={self.nbest_size}, alpha={self.alpha})")
 
 
 class SubwordNMTTokenizer(BasicTokenizer):
+
     def __init__(
         self,
         level: str = "bpe",
@@ -194,9 +198,10 @@ class SubwordNMTTokenizer(BasicTokenizer):
         assert self.codes.is_file(), f"codes file {self.codes} not found."
 
         bpe_parser = apply_bpe.create_parser()
-        bpe_args = bpe_parser.parse_args(
-            ["--codes", kwargs["codes"], "--separator", kwargs.get("separator", "@@")]
-        )
+        bpe_args = bpe_parser.parse_args([
+            "--codes", kwargs["codes"], "--separator",
+            kwargs.get("separator", "@@")
+        ])
         self.bpe = apply_bpe.BPE(
             bpe_args.codes,
             bpe_args.merges,
@@ -214,11 +219,14 @@ class SubwordNMTTokenizer(BasicTokenizer):
             return None
         return tokenized
 
-    def post_process(self, sequence: List[str], remove_unk: bool = False) -> str:
+    def post_process(self,
+                     sequence: List[str],
+                     remove_unk: bool = False) -> str:
         sequence = self._remove_special(sequence, remove_unk=remove_unk)
 
         # Remove separators, join with spaces
-        detokenized = self.SPACE.join(sequence).replace(self.separator + self.SPACE, "")
+        detokenized = self.SPACE.join(sequence).replace(
+            self.separator + self.SPACE, "")
         # Remove final merge marker.
         if detokenized.endswith(self.separator):
             detokenized = detokenized[:-2]
@@ -232,13 +240,11 @@ class SubwordNMTTokenizer(BasicTokenizer):
         shutil.copy2(self.codes, (model_dir / self.codes.name).as_posix())
 
     def __repr__(self):
-        return (
-            f"{self.__class__.__name__}(level={self.level}, "
-            f"lowercase={self.lowercase}, normalize={self.normalize}, "
-            f"filter_by_length=({self.min_length}, {self.max_length}), "
-            f"tokenizer={self.bpe.__class__.__name__}, "
-            f"separator={self.separator}, dropout={self.dropout})"
-        )
+        return (f"{self.__class__.__name__}(level={self.level}, "
+                f"lowercase={self.lowercase}, normalize={self.normalize}, "
+                f"filter_by_length=({self.min_length}, {self.max_length}), "
+                f"tokenizer={self.bpe.__class__.__name__}, "
+                f"separator={self.separator}, dropout={self.dropout})")
 
 
 def _build_tokenizer(cfg: Dict) -> BasicTokenizer:
@@ -253,9 +259,11 @@ def _build_tokenizer(cfg: Dict) -> BasicTokenizer:
             min_length=cfg.get("min_length", -1),
         )
     elif cfg["level"] == "bpe":
-        tokenizer_type = cfg.get("tokenizer_type", cfg.get("bpe_type", "sentencepiece"))
+        tokenizer_type = cfg.get("tokenizer_type",
+                                 cfg.get("bpe_type", "sentencepiece"))
         if tokenizer_type == "sentencepiece":
-            assert "tokenizer_cfg" in cfg and "model_file" in cfg["tokenizer_cfg"]
+            assert "tokenizer_cfg" in cfg and "model_file" in cfg[
+                "tokenizer_cfg"]
             tokenizer = SentencePieceTokenizer(
                 level=cfg["level"],
                 lowercase=cfg.get("lowercase", False),
@@ -275,9 +283,11 @@ def _build_tokenizer(cfg: Dict) -> BasicTokenizer:
                 **cfg["tokenizer_cfg"],
             )
         else:
-            raise ConfigurationError(f"{tokenizer_type}: Unknown tokenizer type.")
+            raise ConfigurationError(
+                f"{tokenizer_type}: Unknown tokenizer type.")
     else:
-        raise ConfigurationError(f"{cfg['level']}: Unknown tokenization level.")
+        raise ConfigurationError(
+            f"{cfg['level']}: Unknown tokenization level.")
     return tokenizer
 
 

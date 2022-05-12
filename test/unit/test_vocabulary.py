@@ -10,6 +10,7 @@ from joeynmt.vocabulary import Vocabulary
 
 
 class TestVocabulary(unittest.TestCase):
+
     def setUp(self):
         self.voc_limit = 1000
         self.cfg = {
@@ -36,7 +37,8 @@ class TestVocabulary(unittest.TestCase):
             "bricht – nicht gerade die aufregendste Geschichte vom Meer ist.",
             "GROẞ",  # ẞ (uppercase) requires Unicode
         ]
-        self.word_list = set((" ".join(self.sents)).split())  # only unique tokens
+        self.word_list = set(
+            (" ".join(self.sents)).split())  # only unique tokens
         self.char_list = set(list(" ".join(self.sents)))  # only unique tokens
         self.vocab_file_bpe = Path("test/data/toy/bpe200.txt")
         self.vocab_file_sp = Path("test/data/toy/sp200.txt")
@@ -90,7 +92,8 @@ class TestVocabulary(unittest.TestCase):
         ]
 
         # pylint: disable=protected-access
-        self.assertEqual(self.char_vocab._itos, self.specials + expected_char_itos)
+        self.assertEqual(self.char_vocab._itos,
+                         self.specials + expected_char_itos)
         expected_word_itos = [
             "Die",
             "GROẞ",
@@ -113,7 +116,8 @@ class TestVocabulary(unittest.TestCase):
             "vom",
             "–",
         ]
-        self.assertEqual(self.word_vocab._itos, self.specials + expected_word_itos)
+        self.assertEqual(self.word_vocab._itos,
+                         self.specials + expected_word_itos)
         # pylint: enable=protected-access
 
     def testVocabularyFromFile(self):
@@ -147,26 +151,52 @@ class TestVocabulary(unittest.TestCase):
             "m@@",
             "u@@",
         ]
-        self.assertEqual(bpe_vocab._itos[:15], self.specials + expected_bpe_itos)
+        self.assertEqual(bpe_vocab._itos[:15],
+                         self.specials + expected_bpe_itos)
 
         sp_vocab = Vocabulary(tokens=read_list_from_file(self.vocab_file_sp))
-        expected_sp_itos = ["▁", "e", "s", "t", "o", "i", "n", "en", "m", "r", "er"]
+        expected_sp_itos = [
+            "▁", "e", "s", "t", "o", "i", "n", "en", "m", "r", "er"
+        ]
         self.assertEqual(sp_vocab._itos[:15], self.specials + expected_sp_itos)
         # pylint: enable=protected-access
 
     def testVocabularyFromDataset(self):
-        src_vocab, trg_vocab, train_data, _, _ = load_data(self.cfg, datasets=["train"])
+        src_vocab, trg_vocab, train_data, _, _ = load_data(self.cfg,
+                                                           datasets=["train"])
         self.assertEqual(len(src_vocab), self.voc_limit + len(self.specials))
         self.assertEqual(len(trg_vocab), self.voc_limit + len(self.specials))
 
         expected_src_itos = [
-            "die", "und", "der", "ist", "in", "das", "wir", "zu", "Sie", "es", "von",
+            "die",
+            "und",
+            "der",
+            "ist",
+            "in",
+            "das",
+            "wir",
+            "zu",
+            "Sie",
+            "es",
+            "von",
         ]
         expected_trg_itos = [
-            "the", "of", "to", "and", "a", "that", "in", "is", "you", "we", "And",
+            "the",
+            "of",
+            "to",
+            "and",
+            "a",
+            "that",
+            "in",
+            "is",
+            "you",
+            "we",
+            "And",
         ]
-        self.assertEqual(src_vocab._itos[:15], self.specials + expected_src_itos)
-        self.assertEqual(trg_vocab._itos[:15], self.specials + expected_trg_itos)
+        self.assertEqual(src_vocab._itos[:15],
+                         self.specials + expected_src_itos)
+        self.assertEqual(trg_vocab._itos[:15],
+                         self.specials + expected_trg_itos)
 
     def testIsUnk(self):
         self.assertTrue(self.word_vocab.is_unk("BLA"))
@@ -178,18 +208,25 @@ class TestVocabulary(unittest.TestCase):
 
     def testEncodingDecoding(self):
         tokenized = [s.split() for s in self.sents]
-        ids, length = self.word_vocab.sentences_to_ids(tokenized, bos=True, eos=True)
+        ids, length = self.word_vocab.sentences_to_ids(tokenized,
+                                                       bos=True,
+                                                       eos=True)
         expected_ids = [
-            [2, 4, 10, 17, 14, 15, 9, 23, 20, 21, 11, 7, 13, 23, 19, 16, 15, 12, 6, 22,
-             8, 18, 3],
-            [2, 5, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            [
+                2, 4, 10, 17, 14, 15, 9, 23, 20, 21, 11, 7, 13, 23, 19, 16, 15,
+                12, 6, 22, 8, 18, 3
+            ],
+            [
+                2, 5, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+                1, 1
+            ],
         ]
         expected_length = [23, 3]
         self.assertEqual(ids, expected_ids)
         self.assertEqual(length, expected_length)
 
-        decoded = self.word_vocab.arrays_to_sentences(
-            np.array(ids), cut_at_eos=True, skip_pad=True
-        )
+        decoded = self.word_vocab.arrays_to_sentences(np.array(ids),
+                                                      cut_at_eos=True,
+                                                      skip_pad=True)
         self.assertEqual(decoded[0], ["<s>"] + tokenized[0] + ["</s>"])
         self.assertEqual(decoded[1], ["<s>"] + tokenized[1] + ["</s>"])

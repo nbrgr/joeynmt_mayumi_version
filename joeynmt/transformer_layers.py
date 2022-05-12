@@ -17,7 +17,10 @@ class MultiHeadedAttention(nn.Module):
     https://github.com/OpenNMT/OpenNMT-py
     """
 
-    def __init__(self, num_heads: int, size: int, dropout: float = 0.1) -> None:
+    def __init__(self,
+                 num_heads: int,
+                 size: int,
+                 dropout: float = 0.1) -> None:
         """
         Create a multi-headed attention layer.
 
@@ -41,7 +44,11 @@ class MultiHeadedAttention(nn.Module):
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, k: Tensor, v: Tensor, q: Tensor, mask: Optional[Tensor] = None):
+    def forward(self,
+                k: Tensor,
+                v: Tensor,
+                q: Tensor,
+                mask: Optional[Tensor] = None):
         """
         Computes multi-headed attention.
 
@@ -82,11 +89,8 @@ class MultiHeadedAttention(nn.Module):
         # get context vector (select values with attention) and reshape
         # back to [B, M, D]
         context = torch.matmul(attention, v)
-        context = (
-            context.transpose(1, 2)
-            .contiguous()
-            .view(batch_size, -1, num_heads * self.head_size)
-        )
+        context = (context.transpose(1, 2).contiguous().view(
+            batch_size, -1, num_heads * self.head_size))
 
         output = self.output_layer(context)
         return output
@@ -164,9 +168,8 @@ class PositionalEncoding(nn.Module):
             )
         pe = torch.zeros(max_len, size)
         position = torch.arange(0, max_len).unsqueeze(1)
-        div_term = torch.exp(
-            (torch.arange(0, size, 2, dtype=torch.float) * -(math.log(10000.0) / size))
-        )
+        div_term = torch.exp((torch.arange(0, size, 2, dtype=torch.float) *
+                              -(math.log(10000.0) / size)))
         pe[:, 0::2] = torch.sin(position.float() * div_term)
         pe[:, 1::2] = torch.cos(position.float() * div_term)
         pe = pe.unsqueeze(0)  # shape: (1, size, max_len)
@@ -183,7 +186,7 @@ class PositionalEncoding(nn.Module):
         :return: positionally encoded word embeddings
         """
         # Add position encodings
-        return emb + self.pe[:, : emb.size(1)]
+        return emb + self.pe[:, :emb.size(1)]
 
 
 class TransformerEncoderLayer(nn.Module):
@@ -217,7 +220,9 @@ class TransformerEncoderLayer(nn.Module):
         super().__init__()
 
         self.layer_norm = nn.LayerNorm(size, eps=1e-6)
-        self.src_src_att = MultiHeadedAttention(num_heads, size, dropout=dropout)
+        self.src_src_att = MultiHeadedAttention(num_heads,
+                                                size,
+                                                dropout=dropout)
 
         self.feed_forward = PositionwiseFeedForward(
             size,
@@ -292,8 +297,12 @@ class TransformerDecoderLayer(nn.Module):
         super().__init__()
         self.size = size
 
-        self.trg_trg_att = MultiHeadedAttention(num_heads, size, dropout=dropout)
-        self.src_trg_att = MultiHeadedAttention(num_heads, size, dropout=dropout)
+        self.trg_trg_att = MultiHeadedAttention(num_heads,
+                                                size,
+                                                dropout=dropout)
+        self.src_trg_att = MultiHeadedAttention(num_heads,
+                                                size,
+                                                dropout=dropout)
 
         self.feed_forward = PositionwiseFeedForward(
             size,

@@ -10,7 +10,6 @@ from torch import Tensor
 
 from joeynmt.constants import PAD_ID
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +61,8 @@ class Batch:
         if self.has_trg:
             assert trg is not None and trg_length is not None
             # trg_input is used for teacher forcing, last one is cut off
-            self.trg_input: Tensor = trg[:, :-1]  # shape (batch_size, seq_length)
+            self.trg_input: Tensor = trg[:, :
+                                         -1]  # shape (batch_size, seq_length)
             self.trg_length: Tensor = trg_length - 1
             # trg is used for loss computation, shifted by one since BOS
             self.trg: Tensor = trg[:, 1:]  # shape (batch_size, seq_length)
@@ -160,17 +160,13 @@ class Batch:
     def score(self, log_probs: Tensor) -> List[List[float]]:
         scores = []
         for i in range(self.nseqs):
-            scores.append(
-                [
-                    log_probs[i, j, ind].item()
-                    for j, ind in enumerate(self.trg[i])
-                    if ind != PAD_ID
-                ]
-            )
+            scores.append([
+                log_probs[i, j, ind].item()
+                for j, ind in enumerate(self.trg[i]) if ind != PAD_ID
+            ])
         return scores
 
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(nseqs={self.nseqs}, ntokens={self.ntokens}, "
-            f"has_trg={self.has_trg}, is_train={self.is_train})"
-        )
+            f"has_trg={self.has_trg}, is_train={self.is_train})")
