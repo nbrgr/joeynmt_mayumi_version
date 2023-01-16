@@ -164,7 +164,7 @@ For details, follow the tutorials in [notebooks](notebooks) dir.
 Joey NMT has 3 modes: `train`, `test`, and `translate`, and all of them takes a
 [YAML](https://yaml.org/)-style config file as argument.
 You can find examples in the `configs` directory.
-`small.yaml` contains a detailed explanation of configuration options.
+`transformer_small.yaml` contains a detailed explanation of configuration options.
 
 Most importantly, the configuration contains the description of the model architecture
 (e.g. number of hidden units in the encoder RNN), paths to the training, development and
@@ -175,18 +175,18 @@ test data, and the training hyperparameters (learning rate, validation frequency
 > in the 3 modes above, has to be done separately.
 > We provide a script that takes care of it: `scritps/build_vocab.py`.
 > ```
-> $ python scripts/build_vocab.py configs/small.yaml --joint
+> $ python scripts/build_vocab.py configs/transformer_small.yaml --joint
 > ```
 
 ### `train` mode
 For training, run 
 ```bash
-$ python -m joeynmt train configs/small.yaml
+$ python -m joeynmt train configs/transformer_small.yaml
 ```
 This will train a model on the training data, validate on validation data, and store
 model parameters, vocabularies, validation outputs. All needed information should be
 specified in the `data`, `training` and `model` section of the config file (here
-`configs/small.yaml`).
+`configs/transformer_small.yaml`).
 
 ```
 model_dir/
@@ -209,7 +209,7 @@ model_dir/
 This mode will generate translations for validation and test set (as specified in the
 configuration) in `model_dir/out.[dev|test]`.
 ```
-$ python -m joeynmt test configs/small.yaml --ckpt model_dir/avg.ckpt
+$ python -m joeynmt test configs/transformer_small.yaml --ckpt model_dir/avg.ckpt
 ```
 If `--ckpt` is not specified above, the checkpoint path in `load_model` of the config
 file or the best model in `model_dir` will be used to generate translations.
@@ -227,7 +227,7 @@ If you want to output the log-probabilities of the hypotheses or references, you
 specify `return_score: 'hyp'` or `return_score: 'ref'` in the testing section of the
 config. And run `test` with `--output_path` and `--save_scores` options.
 ```
-$ python -m joeynmt test configs/small.yaml --ckpt model_dir/avg.ckpt --output_path model_dir/pred --save_scores
+$ python -m joeynmt test configs/transformer_small.yaml --ckpt model_dir/avg.ckpt --output_path model_dir/pred --save_scores
 ```
 This will generate `model_dir/pred.{dev|test}.{scores|tokens}` which contains scores and corresponding tokens.
 
@@ -243,12 +243,12 @@ This mode accepts inputs from stdin and generate translations.
 
 - File translation
   ```
-  $ python -m joeynmt translate configs/small.yaml < my_input.txt > output.txt
+  $ python -m joeynmt translate configs/transformer_small.yaml < my_input.txt > output.txt
   ```
 
 - Interactive translation
   ```
-  $ python -m joeynmt translate configs/small.yaml
+  $ python -m joeynmt translate configs/transformer_small.yaml
   ```
   You'll be prompted to type an input sentence. Joey NMT will then translate with the 
   model specified in `--ckpt` or the config file.
