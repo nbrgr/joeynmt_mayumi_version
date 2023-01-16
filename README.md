@@ -2,6 +2,17 @@
 [![build](https://github.com/joeynmt/joeynmt/actions/workflows/main.yml/badge.svg)](https://github.com/joeynmt/joeynmt/actions/workflows/main.yml)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
+<<<<<<< HEAD
+=======
+## What's new
+- 12th January 2023: upgraded to JoeyNMT v2.2.0
+
+- 26th December 2022:  [＠IT](https://atmarkit.itmedia.co.jp) にて、 [「Python＋Pytorch」と「JoeyNMT」で学ぶニューラル機械翻訳](https://atmarkit.itmedia.co.jp/ait/articles/2212/26/news016.html) の記事が電子書籍化されました。
+
+- 4th September 2022: upgraded to JoeyNMT v2.1.0
+
+
+>>>>>>> 3bfe6798abe6ddfb6e80d49395c8adbb21dfc4ec
 ## Goal and Purpose
 :koala: Joey NMT framework is developed for educational purposes.
 It aims to be a **clean** and **minimalistic** code base to help novices 
