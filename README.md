@@ -364,7 +364,7 @@ Here we'll collect projects and repositories that are based on Joey NMT, so you 
 inspiration and examples on how to modify and extend the code.
 
 ### Joey NMT v2.x
-- :ear: **JoeyS2T**. Joey NMT is extended for Speech-to-Text tasks! [Code](https://github.com/may-/joeys2t)
+- :ear: **JoeyS2T**. Joey NMT is extended for Speech-to-Text tasks! Checkout the [code](https://github.com/may-/joeys2t) and the [EMNLP 2022 Paper](https://arxiv.org/abs/2210.02545).
 - :right_anger_bubble: **Discord Joey**. This script demonstrates how to deploy Joey NMT models as a Chatbot on Discord. [Code](scripts/discord_joey.py)
 
 ### Joey NMT v1.x
